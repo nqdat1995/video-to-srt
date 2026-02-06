@@ -337,7 +337,71 @@ async def delete_task(task_id: str)
 - **Progress**: 0.0 to 1.0 (percentage)
 - **Result**: Full ExtractResponse when completed
 
-**Request Parameters** (22 tunable parameters):
+#### 7.5 Video Processing Endpoints (Blur & Subtitle)
+```python
+@router.post("/blur")
+def blur(req: BlurRequest)
+
+@router.post("/subtitle")
+def subtitle(req: SubtitleRequest)
+
+@router.post("/blur-and-subtitle")
+def blur_and_subtitle(req: BlurAndSubtitleRequest)
+```
+- **Blur**: Làm mờ các vùng video dựa trên tọa độ
+- **Subtitle**: Thêm phụ đề SRT vào video
+- **Blur & Subtitle**: Kết hợp cả hai thao tác (tối ưu hiệu năng)
+- **GPU Support**: Hỗ trợ GPU acceleration (AMD AMF, NVIDIA NVENC)
+- **Output**: Video được xử lý với hậu tố tuỳ chỉnh
+
+#### 7.5 Video Processing Endpoints (Blur & Subtitle)
+```python
+@router.post("/blur")
+def blur(req: BlurRequest)
+
+@router.post("/subtitle")
+def subtitle(req: SubtitleRequest)
+
+@router.post("/blur-and-subtitle")
+def blur_and_subtitle(req: BlurAndSubtitleRequest)
+```
+- **Blur**: Làm mờ các vùng video dựa trên tọa độ
+- **Subtitle**: Thêm phụ đề SRT vào video
+- **Blur & Subtitle**: Kết hợp cả hai thao tác (tối ưu hiệu năng)
+- **GPU Support**: Hỗ trợ GPU acceleration (AMD AMF, NVIDIA NVENC)
+- **Output**: Video được xử lý với hậu tố tuỳ chỉnh
+
+**Blur Request Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `video_path` | string | - | Đường dẫn video trên server |
+| `srt_detail` | list | - | Danh sách region cần blur với tọa độ (x1, y1, x2, y2) |
+| `blur_strength` | int | 25 | Độ mạnh blur (1-100) |
+| `output_suffix` | string | "blurred" | Hậu tố file output |
+| `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
+
+**Subtitle Request Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `video_path` | string | - | Đường dẫn video trên server |
+| `srt_path` | string | - | Đường dẫn file SRT cần thêm |
+| `output_suffix` | string | "subtitled" | Hậu tố file output |
+| `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
+
+**Blur & Subtitle Request Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `video_path` | string | - | Đường dẫn video trên server |
+| `srt_path` | string | - | Đường dẫn file SRT cần thêm |
+| `srt_detail` | list | - | Danh sách region cần blur với tọa độ |
+| `blur_strength` | int | 25 | Độ mạnh blur (1-100) |
+| `output_suffix` | string | "vnsrt" | Hậu tố file output |
+| `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
+
+**Request Parameters** (Subtitle Extraction - 22 tunable parameters):
 
 | Category | Parameter | Default | Description |
 |----------|-----------|---------|-------------|

@@ -1,13 +1,13 @@
 """Video processing service"""
 import os
 import time
-from typing import List, Optional, Tuple, Callable
+from typing import List, Optional, Tuple, Callable, Dict, Any
 from collections import Counter
 
 import cv2
 import numpy as np
 
-from ..models.requests import ExtractRequest
+from ..models.requests import ExtractRequest, BlurAndSubtitleRequest, BlurRequest, SubtitleRequest
 from ..models.responses import ExtractResponse
 from ..models.internal import CueDraft
 from ..services.ocr_service import ocr_service
@@ -26,6 +26,130 @@ class VideoProcessor:
        self.ocr_service = ocr_service
        self.ffmpeg_service = ffmpeg_service
        self.srt_service = srt_service
+
+   def blur_and_add_subtitles(
+       self,
+       req: BlurAndSubtitleRequest
+   ) -> Dict[str, Any]:
+       """
+       Blur original subtitles and add new SRT to video
+
+       Args:
+           req: Blur and subtitle request
+
+       Returns:
+           Dictionary with output_path and stats
+       """
+       # Validate input files
+       if not os.path.isfile(req.video_path):
+           raise FileNotFoundError(f"Video file not found: {req.video_path}")
+       if not os.path.isfile(req.srt_path):
+           raise FileNotFoundError(f"SRT file not found: {req.srt_path}")
+
+       # Check GPU availability
+       gpu_support = self.ffmpeg_service.check_gpu_support()
+       use_gpu = req.use_gpu and (gpu_support.get("amd_amf", False) or gpu_support.get("nvidia_nvenc", False))
+
+       # Process video with blur and subtitles with GPU acceleration if available
+       output_path = self.ffmpeg_service.blur_and_add_subtitles_sequential(
+           video_path=req.video_path,
+           srt_path=req.srt_path,
+           srt_detail=req.srt_detail,
+           blur_strength=req.blur_strength,
+           output_suffix=req.output_suffix,
+           use_gpu=use_gpu
+       )
+
+       return {
+           "output_path": output_path,
+           "video_path": req.video_path,
+           "srt_path": req.srt_path,
+           "blur_strength": req.blur_strength,
+           "srt_count": len(req.srt_detail) if req.srt_detail else 0,
+           "gpu_acceleration": use_gpu,
+           "message": "Video processed successfully"
+       }
+
+   def blur_video(
+       self,
+       req: BlurRequest
+   ) -> Dict[str, Any]:
+       """
+       Blur regions in video based on SRT detail coordinates
+
+       Args:
+           req: Blur request
+
+       Returns:
+           Dictionary with output_path and stats
+       """
+       # Validate input file
+       if not os.path.isfile(req.video_path):
+           raise FileNotFoundError(f"Video file not found: {req.video_path}")
+
+       # Check GPU availability
+       gpu_support = self.ffmpeg_service.check_gpu_support()
+       use_gpu = req.use_gpu and (gpu_support.get("amd_amf", False) or gpu_support.get("nvidia_nvenc", False))
+
+       # Process video with blur
+       output_path = self.ffmpeg_service.blur_and_add_subtitles_sequential(
+           video_path=req.video_path,
+           srt_path=None,  # No subtitles, only blur
+           srt_detail=req.srt_detail,
+           blur_strength=req.blur_strength,
+           output_suffix=req.output_suffix,
+           use_gpu=use_gpu
+       )
+
+       return {
+           "output_path": output_path,
+           "video_path": req.video_path,
+           "blur_strength": req.blur_strength,
+           "srt_count": len(req.srt_detail) if req.srt_detail else 0,
+           "gpu_acceleration": use_gpu,
+           "message": "Video blurred successfully"
+       }
+
+   def add_subtitles(
+       self,
+       req: SubtitleRequest
+   ) -> Dict[str, Any]:
+       """
+       Add SRT subtitles to video
+
+       Args:
+           req: Subtitle request
+
+       Returns:
+           Dictionary with output_path and stats
+       """
+       # Validate input files
+       if not os.path.isfile(req.video_path):
+           raise FileNotFoundError(f"Video file not found: {req.video_path}")
+       if not os.path.isfile(req.srt_path):
+           raise FileNotFoundError(f"SRT file not found: {req.srt_path}")
+
+       # Check GPU availability
+       gpu_support = self.ffmpeg_service.check_gpu_support()
+       use_gpu = req.use_gpu and (gpu_support.get("amd_amf", False) or gpu_support.get("nvidia_nvenc", False))
+
+       # Process video with subtitles only (no blur)
+       output_path = self.ffmpeg_service.blur_and_add_subtitles_sequential(
+           video_path=req.video_path,
+           srt_path=req.srt_path,
+           srt_detail=[],  # Empty list, no blur regions
+           blur_strength=0,  # No blur
+           output_suffix=req.output_suffix,
+           use_gpu=use_gpu
+       )
+
+       return {
+           "output_path": output_path,
+           "video_path": req.video_path,
+           "srt_path": req.srt_path,
+           "gpu_acceleration": use_gpu,
+           "message": "Subtitles added successfully"
+       }
 
    def process_video(
        self,

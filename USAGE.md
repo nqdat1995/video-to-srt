@@ -150,24 +150,186 @@ curl "http://localhost:8000/task/$TASK_ID"
 curl -X DELETE "http://localhost:8000/task/$TASK_ID"
 ```
 
-### 4. Python Client
+### 4. Blur Video (Làm mờ các vùng video)
+```bash
+curl -X POST "http://localhost:8000/blur" \
+-H "Content-Type: application/json" \
+-d '{
+   "video_path": "D:/videos/sample.mp4",
+   "srt_detail": [
+      {
+         "srt": "Original subtitle",
+         "srt_time": "00:00:01,000 --> 00:00:03,000",
+         "x1": 100,
+         "y1": 400,
+         "x2": 500,
+         "y2": 450
+      }
+   ],
+   "blur_strength": 25,
+   "output_suffix": "blurred",
+   "use_gpu": true
+}'
+```
+
+### 5. Add Subtitles (Thêm phụ đề vào video)
+```bash
+curl -X POST "http://localhost:8000/subtitle" \
+-H "Content-Type: application/json" \
+-d '{
+   "video_path": "D:/videos/sample.mp4",
+   "srt_path": "D:/videos/subtitles.srt",
+   "output_suffix": "subtitled",
+   "use_gpu": true
+}'
+```
+
+### 6. Blur and Add Subtitles (Kết hợp cả hai)
+```bash
+curl -X POST "http://localhost:8000/blur-and-subtitle" \
+-H "Content-Type: application/json" \
+-d '{
+   "video_path": "D:/videos/sample.mp4",
+   "srt_path": "D:/videos/subtitles.srt",
+   "srt_detail": [
+      {
+         "srt": "Original subtitle",
+         "srt_time": "00:00:01,000 --> 00:00:03,000",
+         "x1": 100,
+         "y1": 400,
+         "x2": 500,
+         "y2": 450
+      }
+   ],
+   "blur_strength": 25,
+   "output_suffix": "vnsrt",
+   "use_gpu": true
+}'
+```
+
+### 7. Python Client (Extraction)
 ```python
 import requests
 import time
 
 # Sync extraction
 response = requests.post(
-   "http://localhost:8000/extract-srt",
-   json={
-       "video": "D:/videos/sample.mp4",
-       "lang": "vi",
-       "target_fps": 4.0,
-       "conf_min": 0.6,
-       "output_path": "D:/output/subtitles.srt"
-   }
+   "http://localhost:8000/extract-srt",
+   json={
+       "video": "D:/videos/sample.mp4",
+       "lang": "vi",
+       "target_fps": 4.0,
+       "conf_min": 0.6,
+       "output_path": "D:/output/subtitles.srt"
+   }
 )
 
 result = response.json()
+print(result["srt"])
+print(result["stats"])
+
+# Async extraction with progress tracking
+async_response = requests.post(
+   "http://localhost:8000/extract-srt-async",
+   json={
+       "video": "D:/videos/long_video.mp4",
+       "lang": "vi",
+       "device": "gpu:0"
+   }
+)
+
+task_id = async_response.json()["task_id"]
+
+# Poll for status
+while True:
+   status = requests.get(f"http://localhost:8000/task/{task_id}")
+   data = status.json()
+
+   print(f"Progress: {data['progress']*100:.1f}%")
+
+   if data['status'] == 'completed':
+       print("SRT:", data['result']['srt'])
+       break
+   elif data['status'] == 'failed':
+       print("Error:", data['error'])
+       break
+
+   time.sleep(1)
+
+
+# Cleanup
+requests.delete(f"http://localhost:8000/task/{task_id}")
+```
+
+### 8. Python Client (Video Processing - Blur & Subtitle)
+```python
+import requests
+
+# Blur video regions
+blur_response = requests.post(
+   "http://localhost:8000/blur",
+   json={
+       "video_path": "D:/videos/sample.mp4",
+       "srt_detail": [
+           {
+               "srt": "Original text",
+               "srt_time": "00:00:01,000 --> 00:00:03,000",
+               "x1": 100,
+               "y1": 400,
+               "x2": 500,
+               "y2": 450
+           }
+       ],
+       "blur_strength": 25,
+       "output_suffix": "blurred",
+       "use_gpu": True
+   }
+)
+
+result = blur_response.json()
+print(f"Blurred video: {result['data']['output_path']}")
+
+# Add subtitles to video
+subtitle_response = requests.post(
+   "http://localhost:8000/subtitle",
+   json={
+       "video_path": "D:/videos/sample.mp4",
+       "srt_path": "D:/videos/subtitles.srt",
+       "output_suffix": "subtitled",
+       "use_gpu": True
+   }
+)
+
+result = subtitle_response.json()
+print(f"Subtitled video: {result['data']['output_path']}")
+
+# Combined: Blur + Add Subtitles
+combined_response = requests.post(
+   "http://localhost:8000/blur-and-subtitle",
+   json={
+       "video_path": "D:/videos/sample.mp4",
+       "srt_path": "D:/videos/subtitles.srt",
+       "srt_detail": [
+           {
+               "srt": "Original text",
+               "srt_time": "00:00:01,000 --> 00:00:03,000",
+               "x1": 100,
+               "y1": 400,
+               "x2": 500,
+               "y2": 450
+           }
+       ],
+       "blur_strength": 25,
+       "output_suffix": "vnsrt",
+       "use_gpu": True
+   }
+)
+
+result = combined_response.json()
+print(f"Processed video: {result['data']['output_path']}")
+print(f"GPU used: {result['data']['gpu_acceleration']}")
+```
+
 print(result["srt"])
 print(result["stats"])
 

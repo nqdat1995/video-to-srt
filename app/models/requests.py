@@ -55,3 +55,33 @@ class ExtractRequest(BaseModel):
        None, 
        description="If set, write .srt to this path on server"
    )
+
+
+class BlurRequest(BaseModel):
+   """Request model for blurring original subtitles in video"""
+
+   video_path: str = Field(..., description="Path to video file on server")
+   srt_detail: list = Field(..., description="List of SRT detail objects with coordinates (x1, y1, x2, y2)")
+   blur_strength: int = Field(25, ge=1, le=100, description="Blur strength (higher = more blur)")
+   output_suffix: str = Field("blurred", description="Output file suffix")
+   use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
+
+
+class SubtitleRequest(BaseModel):
+   """Request model for adding SRT subtitles to video"""
+
+   video_path: str = Field(..., description="Path to video file on server")
+   srt_path: str = Field(..., description="Path to extracted SRT file")
+   output_suffix: str = Field("subtitled", description="Output file suffix")
+   use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
+
+
+class BlurAndSubtitleRequest(BaseModel):
+   """Request model for blurring original subtitles and adding new SRT (combined operation)"""
+
+   video_path: str = Field(..., description="Path to video file on server")
+   srt_path: str = Field(..., description="Path to extracted SRT file")
+   srt_detail: list = Field(..., description="List of SRT detail objects with coordinates (x1, y1, x2, y2)")
+   blur_strength: int = Field(25, ge=1, le=100, description="Blur strength (higher = more blur)")
+   output_suffix: str = Field("vnsrt", description="Output file suffix")
+   use_gpu: bool = Field(True, description="Enable GPU acceleration if available")

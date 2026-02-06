@@ -7,7 +7,7 @@ from typing import Dict
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks
 
-from ..models.requests import ExtractRequest
+from ..models.requests import ExtractRequest, BlurAndSubtitleRequest, BlurRequest, SubtitleRequest
 from ..models.responses import ExtractResponse, TaskStatusResponse
 from ..services.video_processor import video_processor
 
@@ -36,6 +36,75 @@ def extract_srt(req: ExtractRequest):
        Extraction response with SRT and stats
    """
    return video_processor.process_video(req)
+
+
+@router.post("/blur")
+def blur(req: BlurRequest):
+   """
+   Blur regions in video based on coordinates
+
+   Args:
+       req: Blur request
+
+   Returns:
+       Response with output video path and stats
+   """
+   try:
+       result = video_processor.blur_video(req)
+       return {
+           "status": "success",
+           "data": result
+       }
+   except FileNotFoundError as e:
+       raise HTTPException(status_code=404, detail=str(e))
+   except Exception as e:
+       raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/subtitle")
+def subtitle(req: SubtitleRequest):
+   """
+   Add SRT subtitles to video
+
+   Args:
+       req: Subtitle request
+
+   Returns:
+       Response with output video path and stats
+   """
+   try:
+       result = video_processor.add_subtitles(req)
+       return {
+           "status": "success",
+           "data": result
+       }
+   except FileNotFoundError as e:
+       raise HTTPException(status_code=404, detail=str(e))
+   except Exception as e:
+       raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/blur-and-subtitle")
+def blur_and_subtitle(req: BlurAndSubtitleRequest):
+   """
+   Blur original subtitles and add new SRT to video (combined operation)
+
+   Args:
+       req: Blur and subtitle request
+
+   Returns:
+       Response with output video path and stats
+   """
+   try:
+       result = video_processor.blur_and_add_subtitles(req)
+       return {
+           "status": "success",
+           "data": result
+       }
+   except FileNotFoundError as e:
+       raise HTTPException(status_code=404, detail=str(e))
+   except Exception as e:
+       raise HTTPException(status_code=500, detail=str(e))
 
 
 @router.post("/extract-srt-async")
