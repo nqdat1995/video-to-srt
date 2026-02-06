@@ -1,7 +1,8 @@
 """Internal data models"""
 import threading
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from collections import Counter
+from typing import List, Tuple, Optional
 from paddleocr import PaddleOCR
 
 
@@ -21,3 +22,4 @@ class CueDraft:
    start: float
    last: float
    text_votes: Counter
+   bbox_list: List[Tuple[float, float, float, float]] = field(default_factory=list)  # List of (x1, y1, x2, y2)

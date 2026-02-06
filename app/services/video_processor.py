@@ -186,6 +186,7 @@ class VideoProcessor:
 
        # Generate SRT
        srt_text = self.srt_service.cues_to_srt(cues)
+       srt_details = self.srt_service.generate_srt_details(cues)
 
        # Save if requested
        if req.output_path:
@@ -222,7 +223,7 @@ class VideoProcessor:
 
        update_progress(1.0)
 
-       return ExtractResponse(srt=srt_text, stats=response_stats)
+       return ExtractResponse(srt=srt_text, srt_detail=srt_details, stats=response_stats)
 
    def _ocr_loop(
        self,
@@ -237,7 +238,7 @@ class VideoProcessor:
        total_frames: int,
        stats: dict,
        update_progress: Callable[[float], None]
-   ) -> List[Tuple[float, float, str]]:
+   ) -> List[Tuple[float, float, str, List[Tuple[float, float, float, float]]]]:
        """Main OCR processing loop"""
 
        use_batch_ocr = req.device.startswith("gpu") and settings.BATCH_OCR_SIZE > 1
@@ -250,28 +251,30 @@ class VideoProcessor:
        pending_count: int = 0
        empty_pending_count: int = 0
        last_time: float = 0.0
-       cues_raw: List[Tuple[float, float, str]] = []
+       cues_raw: List[Tuple[float, float, str, List[Tuple[float, float, float, float]]]] = []
 
        prev_hash = None
        frame_idx = 0
 
-       def accept_text_at(t: float, text: str):
+       def accept_text_at(t: float, text: str, bbox: List[Tuple[float, float, float, float]] = None):
            nonlocal current
            if current is None:
-               current = CueDraft(start=t, last=t, text_votes=Counter())
+               current = CueDraft(start=t, last=t, text_votes=Counter(), bbox_list=[])
            current.last = t
            current.text_votes[text] += 1
+           if bbox:
+               current.bbox_list.extend(bbox)
 
        def close_current(end_t: float):
            nonlocal current
            if current is None:
                return
-           s, e, text = self.srt_service.finalize_cue(current)
+           s, e, text, bbox_list = self.srt_service.finalize_cue(current)
            e = max(e, end_t)
-           cues_raw.append((s, e, text))
+           cues_raw.append((s, e, text, bbox_list))
            current = None
 
-       def process_subtitle_frame(ts: float, sub: str):
+       def process_subtitle_frame(ts: float, sub: str, bbox: List[Tuple[float, float, float, float]] = None):
            nonlocal current, pending_text, pending_first_time, pending_count
            nonlocal empty_pending_count, last_time
 
@@ -287,7 +290,7 @@ class VideoProcessor:
            empty_pending_count = 0
 
            if current is None:
-               accept_text_at(ts, sub)
+               accept_text_at(ts, sub, bbox)
                pending_text = None
                pending_count = 0
                last_time = ts
@@ -295,7 +298,7 @@ class VideoProcessor:
 
            cur_best = current.text_votes.most_common(1)[0][0] if current.text_votes else ""
            if similarity(sub, cur_best) >= req.sim_thr:
-               accept_text_at(ts, sub)
+               accept_text_at(ts, sub, bbox)
                pending_text = None
                pending_count = 0
            else:
@@ -308,7 +311,7 @@ class VideoProcessor:
 
                if pending_count >= req.debounce_frames:
                    close_current(pending_first_time)
-                   accept_text_at(pending_first_time, pending_text)
+                   accept_text_at(pending_first_time, pending_text, bbox)
                    pending_text = None
                    pending_count = 0
 
@@ -387,33 +390,39 @@ class VideoProcessor:
                    ocr_batch_buffer.append((t_sec, roi))
                    if len(ocr_batch_buffer) >= settings.BATCH_OCR_SIZE:
                        for batch_ts, (texts, scores, polys) in process_ocr_batch():
+                           # Extract bounding boxes from polygons
+                           bbox_list = self._extract_bboxes_from_polys(polys)
                            subtitle = self.ocr_service.assemble_subtitle_text(
                                texts, scores, polys, req.conf_min
                            )
                            subtitle = normalize_text(subtitle)
-                           process_subtitle_frame(batch_ts, subtitle)
+                           process_subtitle_frame(batch_ts, subtitle, bbox_list)
                else:
                    t2 = time.time()
                    texts, scores, polys = self.ocr_service.run_ocr(entry, roi)
                    stats["t_ocr"] += time.time() - t2
                    stats["frames_ocr"] += 1
 
+                   # Extract bounding boxes from polygons
+                   bbox_list = self._extract_bboxes_from_polys(polys)
                    subtitle = self.ocr_service.assemble_subtitle_text(
                        texts, scores, polys, req.conf_min
                    )
                    subtitle = normalize_text(subtitle)
-                   process_subtitle_frame(t_sec, subtitle)
+                   process_subtitle_frame(t_sec, subtitle, bbox_list)
 
            frame_idx += 1
 
        # Process remaining batch
        if ocr_batch_buffer:
            for batch_ts, (texts, scores, polys) in process_ocr_batch():
+               # Extract bounding boxes from polygons
+               bbox_list = self._extract_bboxes_from_polys(polys)
                subtitle = self.ocr_service.assemble_subtitle_text(
                    texts, scores, polys, req.conf_min
                )
                subtitle = normalize_text(subtitle)
-               process_subtitle_frame(batch_ts, subtitle)
+               process_subtitle_frame(batch_ts, subtitle, bbox_list)
 
        # Close final cue
        if current is not None:
@@ -451,6 +460,52 @@ class VideoProcessor:
            roi = enhance_roi(roi)
 
        return roi
+
+   def _extract_bboxes_from_polys(
+       self,
+       polys: Optional[np.ndarray]
+   ) -> List[Tuple[float, float, float, float]]:
+       """
+       Extract bounding boxes from polygon coordinates
+
+       Args:
+           polys: Polygon coordinates from OCR (Nx4x2 array or similar)
+
+       Returns:
+           List of (x1, y1, x2, y2) tuples
+       """
+       if polys is None:
+           return []
+
+       bbox_list = []
+       try:
+           # Convert to numpy array if not already
+           if not isinstance(polys, np.ndarray):
+               polys = np.array(polys)
+
+           # Handle single polygon or multiple polygons
+           if polys.ndim == 2:
+               # Single polygon: shape (4, 2)
+               polys = polys.reshape(1, -1, 2)
+           elif polys.ndim == 3:
+               # Multiple polygons: shape (N, 4, 2)
+               pass
+           else:
+               return []
+
+           # Extract bbox from each polygon
+           for poly in polys:
+               if len(poly) >= 2:
+                   xs = poly[:, 0]
+                   ys = poly[:, 1]
+                   x1, x2 = float(np.min(xs)), float(np.max(xs))
+                   y1, y2 = float(np.min(ys)), float(np.max(ys))
+                   bbox_list.append((x1, y1, x2, y2))
+       except (ValueError, IndexError, TypeError):
+           # Return empty list if there's any parsing error
+           return []
+
+       return bbox_list
 
 
 # Singleton instance
