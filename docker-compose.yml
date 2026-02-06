@@ -1,0 +1,90 @@
+version: '3.8'
+
+services:
+# CPU-only service
+video-to-srt:
+   build:
+     context: .
+     dockerfile: Dockerfile
+   container_name: video-to-srt
+   ports:
+     - "8000:8000"
+   volumes:
+     # Mount uploads directory for video files
+     - ./uploads:/app/uploads
+     # Mount cache directory for OCR models
+     - ./cache:/app/cache
+     # Mount logs directory
+     - ./logs:/app/logs
+     # Optional: Mount .env file
+     - ./.env:/app/.env:ro
+   environment:
+     # Override settings via environment variables
+     - HOST=0.0.0.0
+     - PORT=8000
+     - WORKERS=1
+     - DEFAULT_DEVICE=cpu
+     - DEFAULT_LANG=vi
+     - DEFAULT_TARGET_FPS=4.0
+     # Logging
+     - LOG_LEVEL=info
+     # PaddleOCR OneDNN fix
+     - FLAGS_use_mkldnn=0
+   restart: unless-stopped
+   healthcheck:
+     test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+     interval: 30s
+     timeout: 10s
+     retries: 3
+     start_period: 40s
+   networks:
+     - video-to-srt-network
+
+# GPU-enabled service (requires nvidia-docker)
+video-to-srt-gpu:
+   build:
+     context: .
+     dockerfile: Dockerfile.gpu
+   container_name: video-to-srt-gpu
+   ports:
+     - "8001:8000"
+   volumes:
+     - ./uploads:/app/uploads
+     - ./cache:/app/cache
+     - ./logs:/app/logs
+     - ./.env:/app/.env:ro
+   environment:
+     - HOST=0.0.0.0
+     - PORT=8000
+     - WORKERS=1
+     - DEFAULT_DEVICE=gpu:0
+     - DEFAULT_LANG=vi
+     - CUDA_VISIBLE_DEVICES=0
+     - LOG_LEVEL=info
+   restart: unless-stopped
+   deploy:
+     resources:
+       reservations:
+         devices:
+           - driver: nvidia
+             count: 1
+             capabilities: [gpu]
+   healthcheck:
+     test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
+     interval: 30s
+     timeout: 10s
+     retries: 3
+     start_period: 60s
+   networks:
+     - video-to-srt-network
+   profiles:
+     - gpu
+
+networks:
+video-to-srt-network:
+   driver: bridge
+
+volumes:
+uploads:
+cache:
+logs:

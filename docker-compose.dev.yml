@@ -1,0 +1,39 @@
+version: '3.8'
+
+services:
+# Development service with hot-reload
+video-to-srt-dev:
+   build:
+     context: .
+     dockerfile: Dockerfile
+   container_name: video-to-srt-dev
+   ports:
+     - "8000:8000"
+   volumes:
+     # Mount entire project for hot-reload
+     - ./app:/app/app
+     - ./run.py:/app/run.py
+     - ./uploads:/app/uploads
+     - ./cache:/app/cache
+     - ./logs:/app/logs
+     - ./.env:/app/.env:ro
+   environment:
+     - HOST=0.0.0.0
+     - PORT=8000
+     - WORKERS=1
+     - DEFAULT_DEVICE=cpu
+     - DEFAULT_LANG=vi
+     - DEFAULT_TARGET_FPS=4.0
+     - LOG_LEVEL=debug
+     # Enable hot-reload
+     - RELOAD=true
+     # PaddleOCR OneDNN fix
+     - FLAGS_use_mkldnn=0
+   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+   restart: unless-stopped
+   networks:
+     - video-to-srt-network
+
+networks:
+video-to-srt-network:
+   driver: bridge

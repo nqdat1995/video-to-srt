@@ -1,0 +1,35 @@
+# Core dependenciesfastapi>=0.104.0,<0.115.0
+uvicorn[standard]>=0.24.0,<0.31.0
+pydantic>=2.0.0,<3.0.0
+
+# Environment configuration
+python-dotenv>=1.0.0
+
+# Computer vision
+opencv-python-headless>=4.8.0,<5.0.0
+numpy>=1.24.0,<2.0.0
+
+# OCR - Using stable version
+paddleocr==2.7.0.3
+
+# PaddlePaddle framework - Using latest stable CPU version
+paddlepaddle==3.0.0
+
+# For GPU (uncomment and comment CPU version above)
+# Choose appropriate CUDA version:
+# - CUDA 12.6: paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
+# - CUDA 12.9: paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
+# paddlepaddle-gpu>=3.2.1,<4.0.0
+
+# Image processing (required by PaddleOCR)
+Pillow>=10.0.0
+
+# Optional: Install with specific features
+# For document parsing features (PP-StructureV3, PaddleOCR-VL):
+# pip install "paddleocr[doc-parser]>=3.4.0,<3.5.0"
+#
+# For all features:
+# pip install "paddleocr[all]>=3.4.0,<3.5.0"
+
+#FastAPI
+fastapi==0.128.1
