@@ -1,72 +1,101 @@
 
 # GPU-enabled Dockerfile for video-to-srt
-# Requires NVIDIA Docker runtime and CUDA 12.x
+# Optimized for PaddleOCR 3.0.0 with CUDA 12.x support
+# Requires: nvidia/cuda:12.x Docker image and nvidia-docker runtime
 
-# Base image with CUDA support
-FROM nvidia/cuda:12.3.0-cudnn9-runtime-ubuntu22.04
+# Stage 1: Builder - GPU dependencies
+FROM nvidia/cuda:12.3.1-cudnn9-runtime-ubuntu22.04 AS builder
 
-# Install Python 3.10
+# Install build dependencies and Python 3.10
 RUN apt-get update && apt-get install -y --no-install-recommends \
-   python3.10 \
-   python3.10-dev \
-   python3-pip \
-   # FFmpeg for video processing
-   ffmpeg \
-   # OpenCV dependencies
-   libgl1-mesa-glx \
-   libglib2.0-0 \
-   libsm6 \
-   libxext6 \
-   libxrender-dev \
-   libgomp1 \
-   # Cleanup
-   && rm -rf /var/lib/apt/lists/*
+    python3.10 \
+    python3.10-dev \
+    python3.10-venv \
+    python3-pip \
+    build-essential \
+    git \
+    && rm -rf /var/lib/apt/lists/*
 
-# Set Python alias
-RUN ln -s /usr/bin/python3.10 /usr/bin/python
+# Set Python alias for convenience
+RUN ln -s /usr/bin/python3.10 /usr/bin/python && \
+    ln -s /usr/bin/python3.10 /usr/bin/python3
 
-# Set working directory
 WORKDIR /app
 
 # Copy requirements
 COPY requirements.txt .
 
-# Install Python dependencies with GPU-enabled PaddlePaddle
-RUN pip install --no-cache-dir --upgrade pip setuptools wheel && \
-   # Install all dependencies except paddlepaddle first
-   grep -v "paddlepaddle" requirements.txt > requirements-nogpu.txt && \
-   pip install --no-cache-dir -r requirements-nogpu.txt && \
-   # Install GPU-enabled PaddlePaddle (CUDA 12.x compatible)
-   pip install --no-cache-dir paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu121/ && \
-   rm requirements-nogpu.txt
+# Create virtual environment and install dependencies
+RUN python -m venv /app/venv && \
+    /app/venv/bin/pip install --no-cache-dir --upgrade pip setuptools wheel && \
+    # Install dependencies without paddlepaddle first
+    grep -v "^paddlepaddle" requirements.txt > /tmp/requirements-nogpu.txt && \
+    /app/venv/bin/pip install --no-cache-dir -r /tmp/requirements-nogpu.txt && \
+    # Install GPU-optimized PaddlePaddle for CUDA 12.x
+    /app/venv/bin/pip install --no-cache-dir paddlepaddle-gpu==3.0.0 -i https://www.paddlepaddle.org.cn/packages/stable/cu121/
+
+# Stage 2: Runtime
+FROM nvidia/cuda:12.3.1-cudnn9-runtime-ubuntu22.04 AS runtime
+
+# Install runtime dependencies
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    python3.10 \
+    # FFmpeg for video processing
+    ffmpeg \
+    # OpenCV dependencies
+    libgl1-mesa-glx \
+    libglib2.0-0 \
+    libsm6 \
+    libxext6 \
+    libxrender-dev \
+    libgomp1 \
+    # Runtime utilities
+    ca-certificates \
+    curl \
+    # Cleanup
+    && rm -rf /var/lib/apt/lists/*
+
+# Set Python alias
+RUN ln -s /usr/bin/python3.10 /usr/bin/python && \
+    ln -s /usr/bin/python3.10 /usr/bin/python3
+
+# Copy virtual environment from builder
+COPY --from=builder /app/venv /app/venv
+
+# Set working directory
+WORKDIR /app
 
 # Copy application code
 COPY . .
 
-# Create directories
+# Create required directories
 RUN mkdir -p /app/uploads /app/cache /app/logs && \
-   chmod -R 755 /app/uploads /app/cache /app/logs
+    chmod -R 755 /app/uploads /app/cache /app/logs
 
-# Environment variables
-ENV PYTHONUNBUFFERED=1 \
-   PYTHONDONTWRITEBYTECODE=1 \
-   # Enable GPU
-   CUDA_VISIBLE_DEVICES=0 \
-   # PaddleOCR cache
-   HUB_HOME=/app/cache \
-   # Uvicorn settings
-   HOST=0.0.0.0 \
-   PORT=8000 \
-   WORKERS=1 \
-   # Default to GPU device
-   DEFAULT_DEVICE=gpu:0
+# Set environment variables
+ENV PATH="/app/venv/bin:$PATH" \
+    PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONPATH=/app \
+    # GPU settings
+    CUDA_VISIBLE_DEVICES=0 \
+    CUDA_HOME=/usr/local/cuda \
+    LD_LIBRARY_PATH=/usr/local/cuda/lib64:$LD_LIBRARY_PATH \
+    # PaddleOCR cache location
+    HUB_HOME=/app/cache \
+    # PaddleOCR GPU settings
+    FLAGS_use_mkldnn=0 \
+    # Suppress verbose logging
+    TF_CPP_MIN_LOG_LEVEL=2 \
+    PYTHONWARNINGS=ignore
 
 # Expose port
 EXPOSE 8000
 
 # Health check
 HEALTHCHECK --interval=30s --timeout=10s --start-period=60s --retries=3 \
-   CMD python -c "import requests; requests.get('http://localhost:8000/health', timeout=5)" || exit 1
+    CMD curl -f http://localhost:8000/health || exit 1
 
-# Run application
-CMD ["python", "run.py"]
+# Default entrypoint
+ENTRYPOINT ["python"]
+CMD ["run.py"]

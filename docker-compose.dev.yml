@@ -1,39 +1,55 @@
 version: '3.8'
 
 services:
-# Development service with hot-reload
-video-to-srt-dev:
-   build:
-     context: .
-     dockerfile: Dockerfile
-   container_name: video-to-srt-dev
-   ports:
-     - "8000:8000"
-   volumes:
-     # Mount entire project for hot-reload
-     - ./app:/app/app
-     - ./run.py:/app/run.py
-     - ./uploads:/app/uploads
-     - ./cache:/app/cache
-     - ./logs:/app/logs
-     - ./.env:/app/.env:ro
-   environment:
-     - HOST=0.0.0.0
-     - PORT=8000
-     - WORKERS=1
-     - DEFAULT_DEVICE=cpu
-     - DEFAULT_LANG=vi
-     - DEFAULT_TARGET_FPS=4.0
-     - LOG_LEVEL=debug
-     # Enable hot-reload
-     - RELOAD=true
-     # PaddleOCR OneDNN fix
-     - FLAGS_use_mkldnn=0
-   command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
-   restart: unless-stopped
-   networks:
-     - video-to-srt-network
+  # Development service with hot-reload capability
+  video-to-srt-dev:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: video-to-srt:dev
+    container_name: video-to-srt-dev
+    ports:
+      - "8000:8000"
+    volumes:
+      # Mount entire app directory for hot-reload
+      - ./app:/app/app
+      # Mount run.py for hot-reload
+      - ./run.py:/app/run.py
+      # Mount data directories
+      - ./uploads:/app/uploads
+      - ./cache:/app/cache
+      - ./logs:/app/logs
+      # Mount .env for configuration (read-only)
+      - ./.env:/app/.env:ro
+    environment:
+      # Server settings
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=1
+      # OCR settings
+      - DEFAULT_DEVICE=cpu
+      - DEFAULT_LANG=vi
+      - DEFAULT_TARGET_FPS=4.0
+      - OCR_CACHE_MAX=2
+      - BATCH_OCR_SIZE=4
+      # Development settings
+      - LOG_LEVEL=DEBUG
+      - RELOAD=true
+      # PaddleOCR fixes
+      - FLAGS_use_mkldnn=0
+      - TF_CPP_MIN_LOG_LEVEL=1
+      - PYTHONWARNINGS=ignore
+    # Use uvicorn with reload for development
+    command: uvicorn app.main:app --host 0.0.0.0 --port 8000 --reload
+    restart: unless-stopped
+    networks:
+      - video-to-srt-network
+    deploy:
+      resources:
+        limits:
+          cpus: '1.0'
+          memory: 1G
 
 networks:
-video-to-srt-network:
-   driver: bridge
+  video-to-srt-network:
+    driver: bridge

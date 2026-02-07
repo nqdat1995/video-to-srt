@@ -1,90 +1,129 @@
 version: '3.8'
 
-services:
-# CPU-only service
-video-to-srt:
-   build:
-     context: .
-     dockerfile: Dockerfile
-   container_name: video-to-srt
-   ports:
-     - "8000:8000"
-   volumes:
-     # Mount uploads directory for video files
-     - ./uploads:/app/uploads
-     # Mount cache directory for OCR models
-     - ./cache:/app/cache
-     # Mount logs directory
-     - ./logs:/app/logs
-     # Optional: Mount .env file
-     - ./.env:/app/.env:ro
-   environment:
-     # Override settings via environment variables
-     - HOST=0.0.0.0
-     - PORT=8000
-     - WORKERS=1
-     - DEFAULT_DEVICE=cpu
-     - DEFAULT_LANG=vi
-     - DEFAULT_TARGET_FPS=4.0
-     # Logging
-     - LOG_LEVEL=info
-     # PaddleOCR OneDNN fix
-     - FLAGS_use_mkldnn=0
-   restart: unless-stopped
-   healthcheck:
-     test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
-     interval: 30s
-     timeout: 10s
-     retries: 3
-     start_period: 40s
-   networks:
-     - video-to-srt-network
+volumes:
+  exchange_data:
+    driver: local
+    driver_opts:
+      type: none
+      device: /run/desktop/mnt/host/d/LEARN/n8n/exchange_data
+      o: bind,uid=1000,gid=1000,rw
 
-# GPU-enabled service (requires nvidia-docker)
-video-to-srt-gpu:
-   build:
-     context: .
-     dockerfile: Dockerfile.gpu
-   container_name: video-to-srt-gpu
-   ports:
-     - "8001:8000"
-   volumes:
-     - ./uploads:/app/uploads
-     - ./cache:/app/cache
-     - ./logs:/app/logs
-     - ./.env:/app/.env:ro
-   environment:
-     - HOST=0.0.0.0
-     - PORT=8000
-     - WORKERS=1
-     - DEFAULT_DEVICE=gpu:0
-     - DEFAULT_LANG=vi
-     - CUDA_VISIBLE_DEVICES=0
-     - LOG_LEVEL=info
-   restart: unless-stopped
-   deploy:
-     resources:
-       reservations:
-         devices:
-           - driver: nvidia
-             count: 1
-             capabilities: [gpu]
-   healthcheck:
-     test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health', timeout=5)"]
-     interval: 30s
-     timeout: 10s
-     retries: 3
-     start_period: 60s
-   networks:
-     - video-to-srt-network
-   profiles:
-     - gpu
+services:
+  # CPU-only service (default)
+  video-to-srt:
+    build:
+      context: .
+      dockerfile: Dockerfile
+      cache_from:
+        - video-to-srt:latest
+    image: video-to-srt:latest
+    container_name: video-to-srt
+    ports:
+      - "8000:8000"
+    volumes:
+      # # Mount uploads directory for video files
+      # - ./uploads:/app/uploads
+      # # Mount cache directory for OCR models
+      # - ./cache:/app/cache
+      # # Mount logs directory
+      # - ./logs:/app/logs
+      # # Optional: Mount .env file (read-only)
+      # - ./.env:/app/.env:ro
+      - exchange_data:/exchange_data
+    environment:
+      # Server settings
+      - HOST=0.0.0.0
+      - PORT=8000
+      - WORKERS=1
+      # OCR settings
+      - DEFAULT_DEVICE=cpu
+      - DEFAULT_LANG=ch
+      - DEFAULT_TARGET_FPS=10
+      - OCR_CACHE_MAX=4
+      - BATCH_OCR_SIZE=8
+      # Logging
+      - LOG_LEVEL=ERROR
+      # PaddleOCR fixes
+      - FLAGS_use_mkldnn=0
+      - TF_CPP_MIN_LOG_LEVEL=2
+      - PYTHONWARNINGS=ignore
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    networks:
+      - video-to-srt-network
+    # deploy:
+    #   resources:
+    #     limits:
+    #       cpus: '2.0'
+    #       memory: 2G
+    #     reservations:
+    #       cpus: '1.0'
+    #       memory: 1G
+
+  # GPU-enabled service (requires nvidia-docker and NVIDIA GPU)
+  # video-to-srt-gpu:
+  #   build:
+  #     context: .
+  #     dockerfile: Dockerfile.gpu
+  #     cache_from:
+  #       - video-to-srt:gpu
+  #   image: video-to-srt:gpu
+  #   container_name: video-to-srt-gpu
+  #   ports:
+  #     - "8001:8000"
+  #   volumes:
+  #     - ./uploads:/app/uploads
+  #     - ./cache:/app/cache
+  #     - ./logs:/app/logs
+  #     - ./.env:/app/.env:ro
+  #   environment:
+  #     # Server settings
+  #     - HOST=0.0.0.0
+  #     - PORT=8000
+  #     - WORKERS=2
+  #     # OCR GPU settings
+  #     - DEFAULT_DEVICE=gpu:0
+  #     - DEFAULT_LANG=vi
+  #     - DEFAULT_TARGET_FPS=6.0
+  #     - OCR_CACHE_MAX=8
+  #     - BATCH_OCR_SIZE=16
+  #     # GPU settings
+  #     - CUDA_VISIBLE_DEVICES=0
+  #     - CUDA_HOME=/usr/local/cuda
+  #     - LD_LIBRARY_PATH=/usr/local/cuda/lib64
+  #     # Logging
+  #     - LOG_LEVEL=WARNING
+  #     # PaddleOCR fixes
+  #     - FLAGS_use_mkldnn=0
+  #     - TF_CPP_MIN_LOG_LEVEL=2
+  #     - PYTHONWARNINGS=ignore
+  #   restart: unless-stopped
+  #   deploy:
+  #     resources:
+  #       reservations:
+  #         devices:
+  #           - driver: nvidia
+  #             count: 1
+  #             capabilities: [gpu]
+  #       limits:
+  #         cpus: '4.0'
+  #         memory: 4G
+  #   healthcheck:
+  #     test: ["CMD", "curl", "-f", "http://localhost:8000/health"]
+  #     interval: 30s
+  #     timeout: 10s
+  #     retries: 3
+  #     start_period: 60s
+  #   networks:
+  #     - video-to-srt-network
+  #   profiles:
+  #     - gpu
 
 networks:
-video-to-srt-network:
-   driver: bridge
-
-volumes:
-uploads:
-cache:
-logs:
+  video-to-srt-network:
+    driver: bridge
