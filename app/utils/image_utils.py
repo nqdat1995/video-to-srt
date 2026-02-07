@@ -85,3 +85,47 @@ def enhance_roi(roi_bgr: np.ndarray) -> np.ndarray:
    l2 = clahe.apply(l)
    out = cv2.cvtColor(cv2.merge([l2, a, b]), cv2.COLOR_LAB2BGR)
    return out
+
+
+def detect_subtitle_region(
+    frame_bgr: np.ndarray,
+    text_density_thr: float = 0.01
+) -> float:
+   """
+   Auto-detect subtitle region by finding where text density is highest
+   
+   Subtitles typically appear in the lower part of video, but this function
+   detects the actual region where text starts.
+
+   Args:
+       frame_bgr: BGR frame
+       text_density_thr: Minimum pixel density threshold to detect text region
+
+   Returns:
+       bottom_start value (0.0-1.0) - fraction of frame height where subtitle region starts
+   """
+   h, w = frame_bgr.shape[:2]
+   gray = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2GRAY)
+   
+   # Detect edges (likely to contain text)
+   edges = cv2.Canny(gray, 50, 150)
+   
+   # Calculate row-wise edge density (normalize by width)
+   row_density = edges.sum(axis=1) / (w * 255.0)
+   
+   # Find where text density becomes significant (moving from bottom upward)
+   significant_thr = text_density_thr
+   text_start_y = h - 1
+   
+   for y in range(h - 1, -1, -1):
+       if row_density[y] >= significant_thr:
+           text_start_y = y
+       else:
+           # If we find a gap (no text), stop searching upward
+           if text_start_y < h - 1:
+               break
+   
+   # Convert to fraction (0.0 = top, 1.0 = bottom)
+   bottom_start = max(0.0, (text_start_y - 100) / h)  # 100px margin above text
+   
+   return min(bottom_start, 1.0)
