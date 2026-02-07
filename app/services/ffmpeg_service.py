@@ -354,10 +354,12 @@ class FfmpegService:
         luma = max(1, min(int(blur_radius), 13))
         chroma = min(luma, 12)
 
-        # safety limit: avoid enormous filtergraphs
-        max_regions = min(len(srt_detail), 10)
+        # Process all regions (FFmpeg can handle ~50+ filters in a chain with enable switches)
+        # The 'enable' parameter ensures blur is only applied during specific time ranges,
+        # so excessive filter complexity is avoided
+        max_regions = len(srt_detail)
 
-        for idx, detail in enumerate(srt_detail[:max_regions]):
+        for idx, detail in enumerate(srt_detail):
             try:
                 x1 = int(detail.get("x1", 0))
                 y1 = int(detail.get("y1", 0))

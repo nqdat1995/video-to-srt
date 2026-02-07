@@ -19,7 +19,7 @@ from ..services.ocr_service import ocr_service
 from ..services.ffmpeg_service import ffmpeg_service
 from ..services.srt_service import srt_service
 from ..utils.hash_utils import ahash, hamming64
-from ..utils.image_utils import detect_active_vertical_region, enhance_roi
+from ..utils.image_utils import detect_active_vertical_region, enhance_roi, detect_subtitle_region
 from ..utils.text_utils import normalize_text, similarity
 from ..core.config import settings
 
@@ -266,6 +266,19 @@ class VideoProcessor:
         H, W = frame0.shape[:2]
         active_top, active_bottom = detect_active_vertical_region(frame0)
 
+        # Auto-detect subtitle region if using default bottom_start
+        effective_bottom_start = req.bottom_start
+        if req.bottom_start == 0.0:
+            # Try to auto-detect subtitle region from first frame
+            try:
+                detected_bottom_start = detect_subtitle_region(frame0)
+                # Only use detected value if it's reasonable (not too close to top or bottom)
+                if 0.0 <= detected_bottom_start <= 0.9:
+                    effective_bottom_start = detected_bottom_start
+            except Exception:
+                # Fallback to full frame if detection fails
+                effective_bottom_start = 0.0
+
         # Reset to start
         cap.set(cv2.CAP_PROP_POS_FRAMES, 0)
 
@@ -301,6 +314,7 @@ class VideoProcessor:
             total_frames,
             stats,
             update_progress,
+            effective_bottom_start,
         )
 
         update_progress(0.92)
@@ -371,8 +385,13 @@ class VideoProcessor:
         total_frames: int,
         stats: dict,
         update_progress: Callable[[float], None],
+        bottom_start: float = None,
     ) -> List[Tuple[float, float, str, List[Tuple[float, float, float, float]]]]:
         """Main OCR processing loop"""
+        
+        # Use provided bottom_start or fallback to request's bottom_start
+        if bottom_start is None:
+            bottom_start = req.bottom_start
 
         use_batch_ocr = req.device.startswith("gpu") and settings.BATCH_OCR_SIZE > 1
         ocr_batch_buffer: List[Tuple[float, np.ndarray]] = []

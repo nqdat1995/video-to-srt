@@ -33,7 +33,7 @@ class Settings:
            f"Given: {_target_fps}, Using: {DEFAULT_TARGET_FPS}"
        )
    
-   DEFAULT_BOTTOM_START: float = 0.0  # 0.0 = lấy toàn bộ frame (subtitle có thể ở bất kỳ đâu)
+   DEFAULT_BOTTOM_START: float = 0.0  # 0.0 = auto-detect subtitle region (if possible), else use full frame
    DEFAULT_MAX_WIDTH: int = 1280
    DEFAULT_ENHANCE: bool = True
 
