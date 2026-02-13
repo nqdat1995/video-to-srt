@@ -14,13 +14,14 @@
 
 ### Công nghệ sử dụng (Tech Stack)
 
-- **FastAPI**: Web framework cho API endpoints
+- **FastAPI 0.128.1**: Web framework cho API endpoints
 - **PaddleOCR 2.7.0.3**: Engine OCR chính (hỗ trợ đa ngôn ngữ, stable version)
 - **PaddlePaddle 3.0.0**: ML framework backend (optimized for stability)
 - **OpenCV (cv2)**: Xử lý video và hình ảnh
 - **NumPy**: Xử lý mảng và tính toán
 - **FFmpeg/FFprobe**: Phân tích video và trích xuất subtitle streams
 - **Pydantic**: Validation và serialization dữ liệu
+- **websocket-client**: WebSocket communication cho TTS API
 - **uv**: Fast Python package manager for dependency installation
 
 ### Các thành phần chính (Main Components)
@@ -307,6 +308,7 @@ def merge_and_filter_cues(cues, min_duration_ms, merge_gap_ms, sim_thr)
 def health()
 ```
 - Simple liveness probe cho load balancers
+- **Response**: `{"status": "ok"}`
 
 #### 7.2 Synchronous Extract SRT Endpoint
 ```python
@@ -315,6 +317,27 @@ def extract_srt(req: ExtractRequest)
 ```
 - **Behavior**: Blocking request, trả về kết quả ngay
 - **Use case**: Small videos, immediate results needed
+- **Processing**: Runs extraction on main thread
+- **Timeout**: Depends on video duration and device
+
+#### Synchronous Full-FPS Extract SRT Endpoint
+
+```python
+@router.post("/extract-srt-frames", response_model=ExtractResponse)
+def extract_srt_frames(req: ExtractRequest)
+```
+- **Purpose**: Run OCR on every sampled frame at `target_fps`. This endpoint samples frames at the configured `target_fps` across the whole video and runs OCR on each sampled frame. When OCR text for consecutive sampled frames is identical (or similar above `sim_thr`), those frames are merged into a single SRT cue spanning their combined time range.
+- **Behavior**: Blocking, exhaustive OCR on sampled frames (visual frame-gating is effectively disabled for skipping OCR). Cue assembly relies on textual matching rather than visual hash gating.
+- **Use case**: Detect short-lived text and ensure textual continuity is used for grouping. Useful when visual similarity heuristics miss rapid text changes that are best handled by comparing textual output.
+- **Processing**:
+  1. Sample frames at `target_fps`.
+  2. Run OCR on each sampled frame (batching allowed when using GPU).
+  3. Compare consecutive OCR outputs using `sim_thr` and `debounce_frames` rules; identical/similar text extends the current cue end time.
+  4. Apply final cleanup (`min_duration_ms`, `merge_gap_ms`).
+- **Key differences vs `/extract-srt`**:
+  - `hash_dist_thr`-based visual skipping is not used to avoid skipping OCR calls; OCR is performed on every sampled frame.
+  - Merging is performed on textual similarity across sampled frames.
+- **Parameters**: Uses the same input parameters as `/extract-srt` (see models and USAGE for full list). `stats.mode` in the response will be set to `full-fps-ocr` to identify this processing mode.
 
 #### 7.3 Asynchronous Extract SRT Endpoint
 ```python
@@ -324,6 +347,7 @@ async def extract_srt_async(req: ExtractRequest, background_tasks: BackgroundTas
 - **Behavior**: Non-blocking, returns task_id immediately
 - **Progress tracking**: Check status via `/task/{task_id}`
 - **Use case**: Large videos, multiple concurrent requests
+- **Response**: `{"task_id": "...", "status": "processing", "message": "..."}`
 
 #### 7.4 Task Management Endpoints
 ```python
@@ -333,55 +357,50 @@ async def get_task_status(task_id: str)
 @router.delete("/task/{task_id}")
 async def delete_task(task_id: str)
 ```
-- **Status**: processing, completed, failed
+- **Status**: `processing`, `completed`, `failed`
 - **Progress**: 0.0 to 1.0 (percentage)
 - **Result**: Full ExtractResponse when completed
+- **Cleanup**: DELETE endpoint removes task from tracking
 
-#### 7.5 Video Processing Endpoints (Blur & Subtitle)
+#### 7.5 Video Blur Endpoint
 ```python
 @router.post("/blur")
 def blur(req: BlurRequest)
-
-@router.post("/subtitle")
-def subtitle(req: SubtitleRequest)
-
-@router.post("/blur-and-subtitle")
-def blur_and_subtitle(req: BlurAndSubtitleRequest)
 ```
-- **Blur**: Làm mờ các vùng video dựa trên tọa độ
-- **Subtitle**: Thêm phụ đề SRT vào video
-- **Blur & Subtitle**: Kết hợp cả hai thao tác (tối ưu hiệu năng)
+- **Purpose**: Làm mờ các vùng video dựa trên tọa độ (dùng để ẩn phụ đề gốc)
 - **GPU Support**: Hỗ trợ GPU acceleration (AMD AMF, NVIDIA NVENC)
-- **Output**: Video được xử lý với hậu tố tuỳ chỉnh
+- **Output**: Video được xử lý với hậu tố "blurred"
 
-#### 7.5 Video Processing Endpoints (Blur & Subtitle)
+**Parameters**:
+
+| Parameter | Type | Default | Range/Type | Description |
+|-----------|------|---------|------------|-------------|
+| `video_path` | string | - | path | Đường dẫn video trên server |
+| `srt_detail` | list[obj] | - | coordinates | Danh sách region cần blur với tọa độ `{x1, y1, x2, y2}` |
+| `blur_strength` | int | 25 | 1-100 | Độ mạnh blur (1=nhẹ, 100=rất mạnh) |
+| `output_suffix` | string | "blurred" | string | Hậu tố file output |
+| `use_gpu` | bool | true | true/false | Bật GPU acceleration nếu khả dụng |
+
+**Example SRT Detail Object**:
 ```python
-@router.post("/blur")
-def blur(req: BlurRequest)
+{
+  "x1": 100,      # Tọa độ X góc trên-trái
+  "y1": 950,      # Tọa độ Y góc trên-trái
+  "x2": 1820,     # Tọa độ X góc dưới-phải
+  "y2": 1050      # Tọa độ Y góc dưới-phải
+}
+```
 
+#### 7.6 Video Subtitle Endpoint
+```python
 @router.post("/subtitle")
 def subtitle(req: SubtitleRequest)
-
-@router.post("/blur-and-subtitle")
-def blur_and_subtitle(req: BlurAndSubtitleRequest)
 ```
-- **Blur**: Làm mờ các vùng video dựa trên tọa độ
-- **Subtitle**: Thêm phụ đề SRT vào video
-- **Blur & Subtitle**: Kết hợp cả hai thao tác (tối ưu hiệu năng)
-- **GPU Support**: Hỗ trợ GPU acceleration (AMD AMF, NVIDIA NVENC)
-- **Output**: Video được xử lý với hậu tố tuỳ chỉnh
+- **Purpose**: Thêm phụ đề SRT vào video
+- **GPU Support**: Hỗ trợ GPU acceleration
+- **Output**: Video được xử lý với hậu tố "subtitled"
 
-**Blur Request Parameters**:
-
-| Parameter | Type | Default | Description |
-|-----------|------|---------|-------------|
-| `video_path` | string | - | Đường dẫn video trên server |
-| `srt_detail` | list | - | Danh sách region cần blur với tọa độ (x1, y1, x2, y2) |
-| `blur_strength` | int | 25 | Độ mạnh blur (1-100) |
-| `output_suffix` | string | "blurred" | Hậu tố file output |
-| `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
-
-**Subtitle Request Parameters**:
+**Parameters**:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
@@ -390,40 +409,100 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest)
 | `output_suffix` | string | "subtitled" | Hậu tố file output |
 | `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
 
-**Blur & Subtitle Request Parameters**:
+#### 7.7 Blur and Subtitle Combined Endpoint
+```python
+@router.post("/blur-and-subtitle")
+def blur_and_subtitle(req: BlurAndSubtitleRequest)
+```
+- **Purpose**: Kết hợp cả hai thao tác (tối ưu hiệu năng)
+- **Advantage**: Xử lý video một lần thay vì hai lần
+- **Output**: Video được xử lý với hậu tố "vnsrt"
+
+**Parameters**:
 
 | Parameter | Type | Default | Description |
 |-----------|------|---------|-------------|
 | `video_path` | string | - | Đường dẫn video trên server |
 | `srt_path` | string | - | Đường dẫn file SRT cần thêm |
-| `srt_detail` | list | - | Danh sách region cần blur với tọa độ |
+| `srt_detail` | list[obj] | - | Danh sách region cần blur với tọa độ |
 | `blur_strength` | int | 25 | Độ mạnh blur (1-100) |
 | `output_suffix` | string | "vnsrt" | Hậu tố file output |
 | `use_gpu` | bool | true | Bật GPU acceleration nếu khả dụng |
 
-**Request Parameters** (Subtitle Extraction - 22 tunable parameters):
+#### 7.8 TTS Audio Synthesis Endpoint
+```python
+@router.post("/tts/generate", response_model=TTSGenerateResponse)
+def tts_generate(req: TTSGenerateRequest)
+```
+- **Purpose**: Tổng hợp âm thanh từ phụ đề SRT
+- **Processing**:
+  1. Parse SRT content thành subtitle blocks
+  2. Download audio từ TTS API cho mỗi subtitle
+  3. Merge audio files theo thứ tự SRT timeline
+  4. Return merged audio (optional: base64)
+- **Prerequisites**: TTS_ENABLED=true, valid API credentials
 
-| Category | Parameter | Default | Description |
-|----------|-----------|---------|-------------|
-| **Input** | `video` | - | Đường dẫn video trên server |
-| **Sampling** | `target_fps` | 4.0 | FPS lấy mẫu (1-30) |
-| | `bottom_start` | 0.55 | % chiều cao bắt đầu ROI |
-| | `max_width` | 1280 | Max width sau khi scale |
-| | `enhance` | true | Bật CLAHE enhancement |
-| **OCR Config** | `lang` | "vi" | Ngôn ngữ OCR |
-| | `device` | "cpu" | Device ("cpu" hoặc "gpu:0") |
-| | `det_model` | "PP-OCRv5_mobile_det" | Text detection model |
-| | `rec_model` | "PP-OCRv5_mobile_rec" | Text recognition model |
-| | `use_textline_orientation` | false | Detect text orientation |
-| | `conf_min` | 0.5 | Confidence threshold |
-| **Performance** | `hash_dist_thr` | 6 | Hamming distance threshold |
-| **Segmentation** | `debounce_frames` | 2 | Text change debounce |
-| | `empty_debounce_frames` | 2 | Empty frame debounce |
-| | `sim_thr` | 0.90 | Similarity threshold |
-| **Cleanup** | `min_duration_ms` | 400 | Min cue duration |
-| | `merge_gap_ms` | 250 | Max gap để merge cues |
-| **Fast Path** | `prefer_subtitle_stream` | false | Ưu tiên stream extraction |
-| | `output_path` | null | Đường dẫn save file |
+**Parameters**:
+
+| Parameter | Type | Default | Description |
+|-----------|------|---------|-------------|
+| `srt_content` | string | - | SRT subtitle content (full text) |
+| `tts_voice` | string | "BV074_streaming" | Voice identifier cho TTS synthesis |
+| `output_filename` | string | auto-generated | Tên file audio output (ví dụ: "output.wav") |
+| `return_base64` | bool | true | Return audio dưới dạng base64 encoded string |
+
+**Available TTS Voices**:
+- `BV074_streaming` - Default voice (Vietnamese)
+- `BV104_streaming` - Alternative voice (Vietnamese)
+- Các voice khác tùy thuộc vào TTS API provider
+
+**Response**:
+```json
+{
+  "task_id": "550e8400-e29b-41d4-a716-446655440000",
+  "status": "success",
+  "audio_filename": "output_audio.wav",
+  "audio_path": "/path/to/tts_output/output_audio.wav",
+  "audio_base64": "UklGRiY...",  # Base64 if return_base64=true
+  "duration_ms": 9000,
+  "size_bytes": 144000,
+  "message": "Audio synthesis completed successfully"
+}
+```
+
+#### Subtitle Extraction Request Parameters (23 tunable parameters):
+
+| # | Category | Parameter | Type | Default | Range | Description |
+|---|----------|-----------|------|---------|-------|-------------|
+| 1 | **Input** | `video` | string | - | path | Đường dẫn video trên server (required) |
+| 2 | **Sampling** | `target_fps` | float | 4.0 | 0.1-30.0 | FPS lấy mẫu frame từ video (cao hơn = accuracy tốt hơn nhưng chậm) |
+| 3 | | `bottom_start` | float | 0.55 | 0.0-1.0 | % chiều cao bắt đầu ROI (0.55 = 55% từ trên, dùng để skip phần trên video) |
+| 4 | | `max_width` | int | 1280 | 320-3840 | Max width sau khi scale frame (giảm để tăng tốc độ, tăng để tăng độ chính xác) |
+| 5 | | `enhance` | bool | true | true/false | Bật CLAHE enhancement trước OCR (tăng contrast subtitle) |
+| 6 | **OCR Config** | `lang` | string | "vi" | "vi","en","zh","ja",... | Ngôn ngữ OCR (auto-selects PP-OCRv5 model) |
+| 7 | | `device` | string | "cpu" | "cpu","gpu:0","gpu:1",... | Device xử lý (CPU hoặc GPU index, GPU nhanh hơn ~3-4x) |
+| 8 | | `det_model` | string | "PP-OCRv5_mobile_det" | model_name | Text detection model (legacy, không dùng trong v3.x - auto select theo lang) |
+| 9 | | `rec_model` | string | "PP-OCRv5_mobile_rec" | model_name | Text recognition model (legacy, không dùng trong v3.x - auto select theo lang) |
+| 10 | | `use_textline_orientation` | bool | false | true/false | Detect và xử lý text xoay/rotated text (chậm hơn) |
+| 11 | | `conf_min` | float | 0.5 | 0.0-1.0 | Confidence threshold cho OCR results (cao hơn = kết quả chính xác hơn nhưng ít text) |
+| 12 | **Frame Gating** | `hash_dist_thr` | int | 6 | 0-64 | Hamming distance threshold (skip frame nếu < threshold, tiết kiệm OCR 60-80%) |
+| 13 | | `content_change_thr` | float | 0.12 | 0.0-1.0 | Threshold detect thay đổi nội dung text (low = sensitive, high = stable) |
+| 14 | | `text_motion_thr` | float | 0.08 | 0.0-1.0 | Threshold detect chuyển động/transition text (skip khi text di chuyển) |
+| 15 | | `text_presence_thr` | float | 0.30 | 0.0-1.0 | Threshold detect sự thay đổi presence text (xuất hiện/mất) |
+| 16 | | `intensity_spike_thr` | float | 0.25 | 0.0-1.0 | Threshold detect intensity spike (sudden changes, scene transitions) |
+| 17 | **Debounce** | `debounce_frames` | int | 2 | 1-10 | Số frame confirm khi detect text thay đổi (cao hơn = bỏ false positive) |
+| 18 | | `empty_debounce_frames` | int | 2 | 1-10 | Số frame confirm khi detect empty frame (cao hơn = ít bỏ subtitle) |
+| 19 | | `sim_thr` | float | 0.90 | 0.5-1.0 | Similarity threshold cho fuzzy matching (low = cho phép typo, high = exact match) |
+| 20 | **SRT Cleanup** | `min_duration_ms` | int | 400 | 0-5000 | Minimum subtitle duration (loại bỏ cues quá ngắn < 400ms) |
+| 21 | | `merge_gap_ms` | int | 250 | 0-3000 | Max gap để merge liên tiếp cues (nếu gap < 250ms thì merge) |
+| 22 | **Output** | `output_path` | string | null | path | Đường dẫn save file SRT trên server (optional, nếu null thì chỉ return SRT text) |
+| 23 | | `prefer_subtitle_stream` | bool | false | true/false | Ưu tiên extract embedded subtitle stream qua ffmpeg thay vì OCR (nhanh hơn 20x) |
+
+**Usage Tips**:
+- **Tăng tốc độ**: Giảm `target_fps`, tăng `hash_dist_thr`, giảm `max_width`, sử dụng GPU
+- **Tăng độ chính xác**: Tăng `target_fps`, tăng `max_width`, giảm `conf_min`, tăng `debounce_frames`
+- **Cứu video có letterbox**: Tự động detect, giảm vùng OCR 20-40%
+- **Subtitle quá fragmented**: Tăng `merge_gap_ms`, giảm `sim_thr`
 
 **Processing Pipeline**:
 
@@ -577,6 +656,37 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest)
 
 ### 4. Translation Pipeline
 - Extract original subtitles → translate → create new SRT
+
+### 5. TTS Service Module (`app/services/tts_service.py`)
+
+#### 5.1 Text-to-Speech Audio Synthesis
+- **Mục đích**: Tổng hợp âm thanh từ subtitle bằng WebSocket API
+- **API**: Kết nối WebSocket để download audio từ TTS service
+- **Batch Processing**: Hỗ trợ xử lý theo lô cho tối ưu hóa hiệu năng
+- **Retry Logic**: Tự động retry khi kết nối thất bại (retriable errors)
+
+#### 5.2 SRT Parsing
+```python
+parse_srt_content(srt_content: str) -> List[Dict]
+```
+- **Chức năng**: Phân tích nội dung SRT thành các đối tượng subtitle
+- **Output**: Danh sách các subtitle với fields: `sequence`, `start`, `end`, `text`
+- **Validation**: Kiểm tra format SRT và xử lý các dòng trống
+
+#### 5.3 Audio File Merging
+```python
+merge_wav_files(wav_files: List[str], output_path: str) -> bool
+```
+- **Mục đích**: Gộp nhiều file WAV thành một file duy nhất
+- **Công cụ**: FFmpeg concat demuxer (lossless merge)
+- **Thứ tự**: Giữ nguyên thứ tự file theo SRT sequence
+
+#### 5.4 Base64 Encoding
+```python
+encode_wav_to_base64(wav_path: str) -> str
+```
+- **Chức năng**: Mã hóa file WAV sang base64 để trả về trong API response
+- **Tiện ích**: Cho phép clients nhận audio data trực tiếp mà không cần tải file riêng
 
 ## Cài đặt và sử dụng
 

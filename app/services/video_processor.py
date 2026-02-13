@@ -19,8 +19,16 @@ from ..services.ocr_service import ocr_service
 from ..services.ffmpeg_service import ffmpeg_service
 from ..services.srt_service import srt_service
 from ..utils.hash_utils import ahash, hamming64
-from ..utils.image_utils import detect_active_vertical_region, enhance_roi, detect_subtitle_region
-from ..utils.text_utils import normalize_text, similarity
+from ..utils.image_utils import (
+    detect_active_vertical_region, 
+    enhance_roi, 
+    detect_subtitle_region,
+    detect_roi_content_change,
+    detect_text_motion,
+    detect_text_presence_change,
+    detect_intensity_spike
+)
+from ..utils.text_utils import normalize_text, similarity, strip_quotes
 from ..core.config import settings
 
 
@@ -191,6 +199,57 @@ class VideoProcessor:
         # OCR path
         return self._extract_with_ocr(req, streams, update_progress)
 
+    def process_video_fullfps(
+        self,
+        req: ExtractRequest,
+        progress_callback: Optional[Callable[[float], None]] = None,
+    ) -> ExtractResponse:
+        """
+        Process video and extract subtitles by running OCR on every sampled frame
+
+        This mode disables the visual hash gating skip (so OCR runs on each sampled
+        frame at `target_fps`) and merges consecutive frames with identical text
+        into cues based on textual similarity.
+        """
+        def update_progress(progress: float):
+            if progress_callback:
+                progress_callback(progress)
+
+        update_progress(0.0)
+
+        # Validate input
+        if not os.path.isfile(req.video):
+            raise FileNotFoundError("Video path not found or not a file")
+
+        update_progress(0.05)
+
+        # Try fast path with subtitle streams (honor prefer_subtitle_stream)
+        streams = self.ffmpeg_service.probe_subtitle_streams(req.video)
+        if req.prefer_subtitle_stream and streams:
+            return self._extract_from_stream(req, streams)
+
+        update_progress(0.15)
+
+        # OCR path (force full-fps mode)
+        entry = self.ocr_service.get_engine(
+            lang=req.lang,
+            device=req.device,
+            det_model=req.det_model,
+            rec_model=req.rec_model,
+            use_textline_orientation=req.use_textline_orientation,
+        )
+
+        update_progress(0.20)
+
+        cap = cv2.VideoCapture(req.video)
+        if not cap.isOpened():
+            raise RuntimeError("Cannot open video")
+
+        try:
+            return self._process_video_frames(cap, req, entry, streams, update_progress, full_fps_mode=True)
+        finally:
+            cap.release()
+
     def _extract_from_stream(
         self, req: ExtractRequest, streams: List[dict]
     ) -> ExtractResponse:
@@ -251,9 +310,10 @@ class VideoProcessor:
         entry,
         streams: List[dict],
         update_progress: Callable[[float], None],
+        full_fps_mode: bool = False,
     ) -> ExtractResponse:
         """Process video frames and extract subtitles"""
-
+        print("Current target FPS:", req.target_fps)
         # Get video properties
         src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
         total_frames = int(cap.get(cv2.CAP_PROP_FRAME_COUNT) or 0)
@@ -315,6 +375,7 @@ class VideoProcessor:
             stats,
             update_progress,
             effective_bottom_start,
+            full_fps_mode=full_fps_mode,
         )
 
         update_progress(0.92)
@@ -386,6 +447,7 @@ class VideoProcessor:
         stats: dict,
         update_progress: Callable[[float], None],
         bottom_start: float = None,
+        full_fps_mode: bool = False,
     ) -> List[Tuple[float, float, str, List[Tuple[float, float, float, float]]]]:
         """Main OCR processing loop"""
         
@@ -408,6 +470,7 @@ class VideoProcessor:
         ] = []
 
         prev_hash = None
+        prev_roi = None
         frame_idx = 0
 
         def accept_text_at(
@@ -417,7 +480,10 @@ class VideoProcessor:
             if current is None:
                 current = CueDraft(start=t, last=t, text_votes=Counter(), bbox_list=[])
             current.last = t
-            current.text_votes[text] += 1
+            # Normalize text by stripping quotes before voting
+            # This ensures "text" and text and 'text' are treated as the same
+            normalized_text = strip_quotes(text)
+            current.text_votes[normalized_text] += 1
             if bbox:
                 current.bbox_list.extend(bbox)
 
@@ -440,8 +506,10 @@ class VideoProcessor:
                 empty_pending_count += 1
                 if empty_pending_count >= req.empty_debounce_frames:
                     close_current(ts)
+                    # Reset pending state properly
                     pending_text = None
                     pending_count = 0
+                    empty_pending_count = 0  # Reset counter after closing
                 last_time = ts
                 return
 
@@ -535,22 +603,70 @@ class VideoProcessor:
                     req.enhance,
                 )
 
-                # Hash gating
+                # Hash gating - Enhanced detection for subtitle changes
                 gray = cv2.cvtColor(roi, cv2.COLOR_BGR2GRAY)
                 hcur = ahash(gray, size=8)
 
-                if (
+                # Skip frame if:
+                # 1. Hash is similar (simple optimization)
+                # 2. BUT don't skip if there's actual content change (text appeared/changed)
+                # 3. OR text motion detected (new subtitle transition)
+                # 4. OR text presence changed (empty→text or text→empty)
+                # 5. OR intensity spike (brightness changes)
+                skip_by_hash = (
                     prev_hash is not None
                     and hamming64(prev_hash, hcur) <= req.hash_dist_thr
-                ):
+                )
+                
+                # Check if content actually changed despite similar hash
+                content_changed = False
+                text_moved = False
+                presence_changed = False
+                intensity_spiked = False
+                
+                if skip_by_hash and prev_roi is not None:
+                    # Layer 2: Content analysis (edge detection)
+                    content_changed = detect_roi_content_change(
+                        prev_roi, roi, change_thr=req.content_change_thr
+                    )
+                    
+                    # Layer 3: Motion detection (optical flow)
+                    text_moved = detect_text_motion(prev_roi, roi, motion_thr=req.text_motion_thr)
+                    
+                    # Layer 4: Text presence change (empty→text or text→empty or long→short)
+                    presence_changed = detect_text_presence_change(
+                        prev_roi, roi, presence_thr=req.text_presence_thr
+                    )
+                    
+                    # Layer 5: Intensity spike (dark→bright or bright→dark)
+                    intensity_spiked = detect_intensity_spike(
+                        prev_roi, roi, spike_thr=req.intensity_spike_thr
+                    )
+
+                # In full-fps mode we intentionally do not skip OCR based on visual hashing
+                if full_fps_mode:
+                    should_skip = False
+                else:
+                    # Skip only if all checks pass (no change detected)
+                    should_skip = (
+                        skip_by_hash
+                        and not content_changed
+                        and not text_moved
+                        and not presence_changed
+                        and not intensity_spiked
+                    )
+
+                if should_skip:
                     stats["frames_hashed_skipped"] += 1
                     if current is not None:
                         current.last = t_sec
                     last_time = t_sec
+                    prev_roi = roi  # Update for next comparison
                     frame_idx += 1
                     continue
 
                 prev_hash = hcur
+                prev_roi = roi
 
                 # OCR processing
                 if use_batch_ocr:
@@ -596,7 +712,7 @@ class VideoProcessor:
 
         # Close final cue
         if current is not None:
-            close_current(last_time + max(0.0, frame_interval))
+            close_current(last_time)
 
         return cues_raw
 

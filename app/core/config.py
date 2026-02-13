@@ -68,5 +68,13 @@ class Settings:
    # Text assembly
    LINE_Y_GAP_PX: int = 18
 
-
+   # TTS (Text-to-Speech) Settings
+   TTS_ENABLED: bool = os.getenv("TTS_ENABLED", "true").lower() == "true"
+   TTS_API_KEY: str = os.getenv("TTS_API_KEY", "ddjeqjLGMn")
+   TTS_API_TOKEN: str = os.getenv("TTS_API_TOKEN", "MTIzNDU2Nzg5YWJjZGVmZx+91sTg0sWUUldexSN5RTG6Ib0KFIDfjJKUzFKs4K/yf7DGAm1lSETIdxTtbo/tKcl1PLZjSekz3hNDeEa0+pQ0Gk41FkIxDTQHtJ1zysLKYlZY8tS1/gXUB2Xg85H+ZFOzwHC54BQIX8kmeW9awYMqNx3dQYkLazc58hL20z0BbPB+46k0iGmkQRc1eCWuePT0evdNMnIuOKFjqF6WcX1oDEq6U1SJGCPqbsnbLsKRF5TQSUZKPzh504jGfRfpn76HXQXQG4/LFb8ipmK31So9XKBpKyRoeYL7jNIRG7keK+S5WlDco6ShFyuX16bYwUfMI7vSGULq6vWLAlDEGju8RZEsPrlnfbT4/YoZqAKRDLnnuZG2KQMl4XSvTgBogj/h33/Ke2orXSJVGBAqGuu7J7d8fwxm9CbMaZ8TbAzmTfaLlEE5+78+Wk+Av7lds/C6Y3amkLgzMWH3O4hmOpU12GOEQb9xwi5eB1Zn2YqkAvvGmLD+M6an69sut8iBk8onSxbv5whtLwKrdwLCWNzrIs8pK39pYgt/Dkg/Ansyin2POO/ih83j4zaiJMufAlMQb/pPxnClHyipVvWNQRiO501IB+TKXEQJ303ZiVJKWZhWbjyhzg2rUSZFr3ldVZ4L0o6sIqvmqmiFbwqcMmE5ZBkswLTM79IcoiyNMHL7/h9YFAs9LquaGH7Gn8d3lg==")
+   TTS_DEFAULT_VOICE: str = os.getenv("TTS_DEFAULT_VOICE", "BV074_streaming")
+   TTS_OUTPUT_DIR: str = os.getenv("TTS_OUTPUT_DIR", "./tts_output")
+   TTS_TEMP_DIR: str = os.getenv("TTS_TEMP_DIR", "./tts_temp")
+   TTS_BATCH_SIZE: int = int(os.getenv("TTS_BATCH_SIZE", "1000"))
+   TTS_MAX_RETRIES: int = int(os.getenv("TTS_MAX_RETRIES", "3"))
 settings = Settings()

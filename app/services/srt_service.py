@@ -58,8 +58,11 @@ class SrtService:
                merged.append([s, e, t, b])
                continue
            ps, pe, pt, pb = merged[-1]
-           if (s - pe) <= gap and similarity(t, pt) >= sim_thr:
-               merged[-1][1] = max(pe, e)
+           # Fix: Kiểm tra khoảng cách chính xác - không merge nếu cue hiện tại bắt đầu trước khi cue trước kết thúc
+           # và không kéo dài thời gian của cue trước nếu nó sẽ chồng lấp với cue tiếp theo
+           if (s - pe) <= gap and (s - pe) >= 0 and similarity(t, pt) >= sim_thr:
+               # Chỉ merge nếu thời gian không chồng lấp (s >= pe)
+               merged[-1][1] = e
                # Merge bbox info (take average or union)
                if b:
                    merged[-1][3].extend(b)

@@ -43,9 +43,40 @@ def normalize_text(s: str) -> str:
    return "\n".join(lines)
 
 
+def strip_quotes(s: str) -> str:
+   """
+   Strip leading/trailing single and double quotes from text
+   
+   Handles cases where OCR sometimes returns quoted text and sometimes doesn't,
+   ensuring that "text" and 'text' and text are treated as equivalent.
+
+   Args:
+       s: Input text
+
+   Returns:
+       Text with quotes stripped
+   """
+   s = s.strip()
+   # Strip leading/trailing single quotes
+   if len(s) >= 2 and s[0] == "'" and s[-1] == "'":
+       s = s[1:-1]
+   # Strip leading/trailing double quotes
+   if len(s) >= 2 and s[0] == '"' and s[-1] == '"':
+       s = s[1:-1]
+   # Strip mixed quotes (e.g., "text' → text)
+   while s and s[0] in ("'", '"'):
+       s = s[1:]
+   while s and s[-1] in ("'", '"'):
+       s = s[:-1]
+   return s
+
+
 def similarity(a: str, b: str) -> float:
    """
    Calculate similarity ratio between two strings
+   
+   Strips quotes before comparison to handle OCR variance where quotes
+   may or may not be present (e.g., "text" vs text).
 
    Args:
        a: First string
@@ -54,4 +85,6 @@ def similarity(a: str, b: str) -> float:
    Returns:
        Similarity ratio from 0.0 to 1.0
    """
-   return SequenceMatcher(None, a, b).ratio()
+   a_clean = strip_quotes(a)
+   b_clean = strip_quotes(b)
+   return SequenceMatcher(None, a_clean, b_clean).ratio()

@@ -36,6 +36,10 @@ class ExtractRequest(BaseModel):
 
    # Hash gating
    hash_dist_thr: int = Field(6, ge=0, le=64)
+   content_change_thr: float = Field(0.12, ge=0.0, le=1.0, description="Threshold for detecting text content changes (0.0-1.0)")
+   text_motion_thr: float = Field(0.08, ge=0.0, le=1.0, description="Threshold for detecting text motion/transitions (0.0-1.0)")
+   text_presence_thr: float = Field(0.30, ge=0.0, le=1.0, description="Threshold for detecting text presence changes (0.0-1.0)")
+   intensity_spike_thr: float = Field(0.25, ge=0.0, le=1.0, description="Threshold for detecting intensity spikes (0.0-1.0)")
 
    # Debounce / fuzzy
    debounce_frames: int = Field(2, ge=1, le=10)
@@ -85,3 +89,12 @@ class BlurAndSubtitleRequest(BaseModel):
    blur_strength: int = Field(25, ge=1, le=100, description="Blur strength (higher = more blur)")
    output_suffix: str = Field("vnsrt", description="Output file suffix")
    use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
+
+
+class TTSGenerateRequest(BaseModel):
+   """Request model for TTS audio synthesis from SRT"""
+
+   srt_content: str = Field(..., description="SRT subtitle content")
+   tts_voice: str = Field("BV074_streaming", description="Voice identifier for TTS synthesis")
+   output_filename: Optional[str] = Field(None, description="Output audio filename (default: auto-generated)")
+   return_base64: bool = Field(True, description="Return audio as base64 encoded string")

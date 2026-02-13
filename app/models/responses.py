@@ -1,7 +1,7 @@
 """Response models for API endpoints"""
 
 from typing import Optional, Dict, Any, List
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 
 class SrtDetail(BaseModel):
@@ -31,3 +31,16 @@ class TaskStatusResponse(BaseModel):
    progress: Optional[float] = None
    result: Optional[ExtractResponse] = None
    error: Optional[str] = None
+
+
+class TTSGenerateResponse(BaseModel):
+   """Response model for TTS audio synthesis"""
+
+   task_id: str = Field(..., description="Unique task identifier")
+   status: str = Field("success", description="Operation status")
+   audio_filename: str = Field(..., description="Generated audio filename")
+   audio_path: str = Field(..., description="Full path to generated audio file")
+   audio_base64: Optional[str] = Field(None, description="Base64 encoded audio data")
+   duration_ms: float = Field(..., description="Audio duration in milliseconds")
+   size_bytes: int = Field(..., description="Audio file size in bytes")
+   message: Optional[str] = Field(None, description="Additional message or error details")
