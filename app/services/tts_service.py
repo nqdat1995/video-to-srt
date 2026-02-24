@@ -373,78 +373,172 @@ def get_wav_duration_ms(wav_path: str) -> float:
         return 0
 
 
-def merge_wav_files(wav_files: List[str], output_path: str) -> bool:
+def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict]) -> str:
     """
-    Merge multiple WAV files into one using ffmpeg
+    Merge WAV files synchronized with SRT subtitles
 
     Args:
-        wav_files: List of WAV file paths to merge
+        wav_files: List of WAV file paths (indexed by subtitle sequence)
         output_path: Output file path
+        subtitles: List of subtitle dictionaries with start_time, end_time, content
 
     Returns:
-        True if successful
+        Base64 encoded audio data
     """
-    if not wav_files:
-        raise ValueError("No WAV files to merge")
+    if not wav_files or not subtitles:
+        raise ValueError("WAV files and subtitles cannot be empty")
 
     try:
-        # Support gaps by allowing wav_files to be list of (path, gap_after_seconds)
-        normalized: List[Tuple[str, float]] = []
-        for item in wav_files:
-            if isinstance(item, (list, tuple)) and len(item) >= 2:
-                normalized.append((str(item[0]), float(item[1] or 0.0)))
-            else:
-                normalized.append((str(item), 0.0))
-
         tmp_dir = os.path.dirname(os.path.abspath(output_path)) or "."
-        concat_file = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_concat.txt")
-        silence_files: List[str] = []
-
+        os.makedirs(tmp_dir, exist_ok=True)
+        
         creation_flags = 0
         if os.name == 'nt':
             creation_flags = subprocess.CREATE_NO_WINDOW
 
+        temp_files: List[str] = []
+        concat_file = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_concat.txt")
+        
+        # Process subtitles in order
+        current_time_us = 0
+        first_subtitle_start = time_to_microseconds(subtitles[0]["start_time"])
+        
+        # Add silence before first subtitle if needed
+        if first_subtitle_start > 0:
+            silence_duration = first_subtitle_start / 1_000_000
+            silence_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_silence.wav")
+            _create_silence(silence_path, silence_duration, creation_flags)
+            temp_files.append(silence_path)
+            current_time_us = first_subtitle_start
+        
+        # Process each subtitle
+        for idx, subtitle in enumerate(subtitles):
+            start_time_us = time_to_microseconds(subtitle["start_time"])
+            end_time_us = time_to_microseconds(subtitle["end_time"])
+            subtitle_duration_us = end_time_us - start_time_us
+            subtitle_duration_sec = subtitle_duration_us / 1_000_000
+            
+            # Add silence between subtitles if gap exists
+            if current_time_us < start_time_us:
+                gap_duration = (start_time_us - current_time_us) / 1_000_000
+                silence_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_silence.wav")
+                _create_silence(silence_path, gap_duration, creation_flags)
+                temp_files.append(silence_path)
+            
+            # Get corresponding WAV file (1-indexed)
+            wav_path = wav_files[idx] if idx < len(wav_files) else None
+            if not wav_path or not os.path.exists(wav_path):
+                raise TTSError(f"WAV file not found for subtitle {idx + 1}")
+            
+            # Get audio duration
+            audio_duration_ms = get_wav_duration_ms(wav_path)
+            audio_duration_sec = audio_duration_ms / 1000
+            
+            # Trim silence from audio
+            trimmed_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_trimmed.wav")
+            _trim_silence(wav_path, trimmed_path, creation_flags)
+            trimmed_duration_ms = get_wav_duration_ms(trimmed_path)
+            trimmed_duration_sec = trimmed_duration_ms / 1000
+            
+            # Adjust audio to match subtitle duration
+            adjusted_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_adjusted.wav")
+            
+            if abs(trimmed_duration_sec - subtitle_duration_sec) < 0.01:
+                # Duration matches, use as-is
+                adjusted_path = trimmed_path
+            elif trimmed_duration_sec > subtitle_duration_sec:
+                # Speed up audio
+                speed_factor = trimmed_duration_sec / subtitle_duration_sec
+                _speed_up_audio(trimmed_path, adjusted_path, speed_factor, creation_flags)
+                if os.path.exists(trimmed_path) and trimmed_path != wav_path:
+                    os.remove(trimmed_path)
+            else:
+                # Add silence to match duration
+                silence_needed = subtitle_duration_sec - trimmed_duration_sec
+                _pad_audio_with_silence(trimmed_path, adjusted_path, silence_needed, creation_flags)
+                if os.path.exists(trimmed_path) and trimmed_path != wav_path:
+                    os.remove(trimmed_path)
+            
+            temp_files.append(adjusted_path)
+            current_time_us = end_time_us
+        
+        # Concatenate all files
         with open(concat_file, "w", encoding="utf-8") as f:
-            for wav_path, gap_after in normalized:
-                f.write(f"file '{os.path.abspath(wav_path)}'\n")
-                if gap_after and gap_after > 0:
-                    silence_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_silence.wav")
-                    cmd_silence = [
-                        "ffmpeg", "-y", "-f", "lavfi",
-                        "-i", "anullsrc=channel_layout=mono:sample_rate=24000",
-                        "-t", f"{gap_after}", "-acodec", "pcm_s16le", silence_path
-                    ]
-                    subprocess.run(cmd_silence, capture_output=True, creationflags=creation_flags, timeout=30)
-                    silence_files.append(silence_path)
-                    f.write(f"file '{os.path.abspath(silence_path)}'\n")
-
+            for fpath in temp_files:
+                f.write(f"file '{os.path.abspath(fpath)}'\n")
+        
         cmd = [
             "ffmpeg", "-f", "concat", "-safe", "0",
             "-i", concat_file,
             "-c", "copy",
             output_path
         ]
-
+        
         proc = subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=180)
         if proc.returncode != 0:
             stderr = proc.stderr.decode("utf-8", errors="replace")
             raise TTSError(f"ffmpeg concat failed: {stderr}")
-
+        
+        # Encode result to base64
+        result = encode_wav_to_base64(output_path)
+        
+        # Cleanup temp files
         try:
             if os.path.exists(concat_file):
                 os.remove(concat_file)
-            for s in silence_files:
-                if os.path.exists(s):
-                    os.remove(s)
+            for fpath in temp_files:
+                if os.path.exists(fpath):
+                    os.remove(fpath)
         except Exception:
             pass
-
-        return True
+        
+        return result
 
     except subprocess.TimeoutExpired as e:
         raise TTSError(f"ffmpeg timeout while merging WAV files: {e}")
     except Exception as e:
         raise TTSError(f"Failed to merge WAV files: {str(e)}")
+
+
+def _create_silence(output_path: str, duration_sec: float, creation_flags: int) -> None:
+    """Create silence WAV file"""
+    cmd = [
+        "ffmpeg", "-y", "-f", "lavfi",
+        "-i", "anullsrc=channel_layout=mono:sample_rate=24000",
+        "-t", f"{duration_sec}", "-acodec", "pcm_s16le",
+        output_path
+    ]
+    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=30)
+
+
+def _trim_silence(input_path: str, output_path: str, creation_flags: int) -> None:
+    """Trim silence from start and end of audio"""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-af", "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB:end_periods=1:end_duration=0.1:end_threshold=-40dB",
+        output_path
+    ]
+    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
+
+
+def _speed_up_audio(input_path: str, output_path: str, speed_factor: float, creation_flags: int) -> None:
+    """Speed up audio to match duration"""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-filter:a", f"atempo={speed_factor}",
+        output_path
+    ]
+    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
+
+
+def _pad_audio_with_silence(input_path: str, output_path: str, pad_duration_sec: float, creation_flags: int) -> None:
+    """Pad audio with silence at the end"""
+    cmd = [
+        "ffmpeg", "-y", "-i", input_path,
+        "-af", f"apad=pad_dur={pad_duration_sec}",
+        output_path
+    ]
+    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
 
 
 def encode_wav_to_base64(wav_path: str) -> str:
