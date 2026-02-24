@@ -16,15 +16,15 @@ os.environ['PADDLE_DISABLE_FAST_MATH'] = '1'
 os.environ['PADDLE_PYCUDA_CACHE_DIR'] = ''
 os.environ['FLAGS_use_mkldnn'] = '0'  # Disable MKL-DNN backend
 
-# Configure logging to suppress DEBUG logs
-logging.basicConfig(
-    level=logging.WARNING,
-    format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
-)
+# # Configure logging to suppress DEBUG logs
+# logging.basicConfig(
+#     level=logging.WARNING,
+#     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+# )
 
-# Suppress verbose loggers
-for logger_name in ['paddleocr', 'paddle', 'paddlex', 'PIL', 'cv2', 'urllib3']:
-    logging.getLogger(logger_name).setLevel(logging.WARNING)
+# # Suppress verbose loggers
+# for logger_name in ['paddleocr', 'paddle', 'paddlex', 'PIL', 'cv2', 'urllib3']:
+#     logging.getLogger(logger_name).setLevel(logging.WARNING)
 
 import uvicorn
 from app.main import app

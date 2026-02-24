@@ -398,6 +398,9 @@ def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict
         temp_files: List[str] = []
         concat_file = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_concat.txt")
         
+        # Small buffer to ensure audio doesn't get clipped (seconds)
+        MERGE_BUFFER_SEC = 0.05
+
         # Process subtitles in order
         current_time_us = 0
         first_subtitle_start = time_to_microseconds(subtitles[0]["start_time"])
@@ -416,6 +419,8 @@ def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict
             end_time_us = time_to_microseconds(subtitle["end_time"])
             subtitle_duration_us = end_time_us - start_time_us
             subtitle_duration_sec = subtitle_duration_us / 1_000_000
+            # add small buffer so merged audio comfortably covers subtitle duration
+            subtitle_duration_sec = max(0.0, subtitle_duration_sec + MERGE_BUFFER_SEC)
             
             # Add silence between subtitles if gap exists
             if current_time_us < start_time_us:
@@ -436,7 +441,17 @@ def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict
             # Trim silence from audio
             trimmed_path = os.path.join(tmp_dir, f"{uuid.uuid4().hex}_trimmed.wav")
             _trim_silence(wav_path, trimmed_path, creation_flags)
+            # If trimming removed everything, fall back to original wav
             trimmed_duration_ms = get_wav_duration_ms(trimmed_path)
+            if trimmed_duration_ms < 10:
+                # fallback: use original wav (no trimming)
+                if os.path.exists(trimmed_path):
+                    try:
+                        os.remove(trimmed_path)
+                    except Exception:
+                        pass
+                trimmed_path = wav_path
+                trimmed_duration_ms = get_wav_duration_ms(trimmed_path)
             trimmed_duration_sec = trimmed_duration_ms / 1000
             
             # Adjust audio to match subtitle duration
@@ -449,14 +464,22 @@ def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict
                 # Speed up audio
                 speed_factor = trimmed_duration_sec / subtitle_duration_sec
                 _speed_up_audio(trimmed_path, adjusted_path, speed_factor, creation_flags)
-                if os.path.exists(trimmed_path) and trimmed_path != wav_path:
-                    os.remove(trimmed_path)
+                # if speedup failed, fall back
+                if not os.path.exists(adjusted_path) or get_wav_duration_ms(adjusted_path) < 10:
+                    adjusted_path = trimmed_path
+                else:
+                    if os.path.exists(trimmed_path) and trimmed_path != wav_path:
+                        os.remove(trimmed_path)
             else:
                 # Add silence to match duration
                 silence_needed = subtitle_duration_sec - trimmed_duration_sec
                 _pad_audio_with_silence(trimmed_path, adjusted_path, silence_needed, creation_flags)
-                if os.path.exists(trimmed_path) and trimmed_path != wav_path:
-                    os.remove(trimmed_path)
+                # if padding failed, fall back
+                if not os.path.exists(adjusted_path) or get_wav_duration_ms(adjusted_path) < 10:
+                    adjusted_path = trimmed_path
+                else:
+                    if os.path.exists(trimmed_path) and trimmed_path != wav_path:
+                        os.remove(trimmed_path)
             
             temp_files.append(adjusted_path)
             current_time_us = end_time_us
@@ -464,15 +487,28 @@ def merge_wav_files(wav_files: List[str], output_path: str, subtitles: List[Dict
         # Concatenate all files
         with open(concat_file, "w", encoding="utf-8") as f:
             for fpath in temp_files:
-                f.write(f"file '{os.path.abspath(fpath)}'\n")
-        
+                abs_path = os.path.abspath(fpath).replace("\\", "/")
+                f.write(f"file '{abs_path}'\n")
+
         cmd = [
-            "ffmpeg", "-f", "concat", "-safe", "0",
-            "-i", concat_file,
-            "-c", "copy",
-            output_path
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-f",
+            "concat",
+            "-safe",
+            "0",
+            "-i",
+            concat_file,
+            "-c:a",
+            "pcm_s16le",
+            "-ar",
+            "24000",
+            output_path,
         ]
-        
+
         proc = subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=180)
         if proc.returncode != 0:
             stderr = proc.stderr.decode("utf-8", errors="replace")
@@ -515,6 +551,7 @@ def _trim_silence(input_path: str, output_path: str, creation_flags: int) -> Non
     cmd = [
         "ffmpeg", "-y", "-i", input_path,
         "-af", "silenceremove=start_periods=1:start_duration=0.1:start_threshold=-40dB:end_periods=1:end_duration=0.1:end_threshold=-40dB",
+        "-ar", "24000", "-ac", "1", "-acodec", "pcm_s16le",
         output_path
     ]
     subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
@@ -522,12 +559,28 @@ def _trim_silence(input_path: str, output_path: str, creation_flags: int) -> Non
 
 def _speed_up_audio(input_path: str, output_path: str, speed_factor: float, creation_flags: int) -> None:
     """Speed up audio to match duration"""
+    # atempo supports 0.5-2.0 per filter; chain filters when needed
+    factors = []
+    remaining = speed_factor
+    while remaining > 2.0:
+        factors.append(2.0)
+        remaining /= 2.0
+    # add final remaining factor (should be >0)
+    if remaining > 0 and remaining != 1.0:
+        factors.append(remaining)
+
+    if not factors:
+        factors = [1.0]
+
+    atempo_filter = ",".join([f"atempo={f:.6f}" for f in factors])
+
     cmd = [
         "ffmpeg", "-y", "-i", input_path,
-        "-filter:a", f"atempo={speed_factor}",
-        output_path
+        "-filter:a", atempo_filter,
+        "-ar", "24000", "-ac", "1", "-acodec", "pcm_s16le",
+        output_path,
     ]
-    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
+    subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=120)
 
 
 def _pad_audio_with_silence(input_path: str, output_path: str, pad_duration_sec: float, creation_flags: int) -> None:
@@ -535,6 +588,7 @@ def _pad_audio_with_silence(input_path: str, output_path: str, pad_duration_sec:
     cmd = [
         "ffmpeg", "-y", "-i", input_path,
         "-af", f"apad=pad_dur={pad_duration_sec}",
+        "-ar", "24000", "-ac", "1", "-acodec", "pcm_s16le",
         output_path
     ]
     subprocess.run(cmd, capture_output=True, creationflags=creation_flags, timeout=60)
