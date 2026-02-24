@@ -1,7 +1,6 @@
 """Run script for development server"""
 
 import os
-import logging
 from dotenv import load_dotenv
 
 # Load environment variables from .env file

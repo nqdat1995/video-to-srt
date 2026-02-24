@@ -2,7 +2,7 @@
 import threading
 from dataclasses import dataclass, field
 from collections import Counter
-from typing import List, Tuple, Optional
+from typing import List, Tuple
 from paddleocr import PaddleOCR
 
 

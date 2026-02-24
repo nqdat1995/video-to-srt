@@ -1,7 +1,6 @@
 """SRT generation service"""
 
 from typing import List, Tuple, Dict, Any
-from collections import Counter
 
 from ..models.internal import CueDraft
 from ..utils.text_utils import srt_timestamp, similarity

@@ -21,7 +21,6 @@ from ..services.tts_service import (
     TTSService,
     parse_srt_content,
     merge_wav_files,
-    encode_wav_to_base64,
     TTSError,
 )
 from ..core.config import settings
