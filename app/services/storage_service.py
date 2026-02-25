@@ -9,6 +9,7 @@ from sqlalchemy.orm import Session
 
 from .database_service import database_service
 from ..core.config import settings
+from ..models.database import Video
 
 
 class StorageService:
