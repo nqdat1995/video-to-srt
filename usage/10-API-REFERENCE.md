@@ -129,13 +129,60 @@ DELETE /task/{task_id}
 ```bash
 POST /blur
 Content-Type: application/json
+```
 
+**Request Body** (Choose one of the following):
+
+**Option 1: Using `video_id` (from /upload-video endpoint)**
+```json
 {
-  "video_path": "uploads/video.mp4",
-  "srt_detail": [{"x1": 100, "y1": 950, "x2": 1820, "y2": 1050}],
+  "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+  "srt_detail": [
+    {
+      "x1": 100,
+      "y1": 950,
+      "x2": 1820,
+      "y2": 1050,
+      "srt_time": "00:00:01,000 --> 00:00:05,000"
+    }
+  ],
   "blur_strength": 25,
   "output_suffix": "blurred",
   "use_gpu": true
+}
+```
+
+**Option 2: Using `video_path` (local file path - backward compatible)**
+```json
+{
+  "video_path": "uploads/video.mp4",
+  "srt_detail": [
+    {
+      "x1": 100,
+      "y1": 950,
+      "x2": 1820,
+      "y2": 1050,
+      "srt_time": "00:00:01,000 --> 00:00:05,000"
+    }
+  ],
+  "blur_strength": 25,
+  "output_suffix": "blurred",
+  "use_gpu": true
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "output_path": "uploads/video_blurred.mp4",
+    "video_path": "uploads/video.mp4",
+    "blur_strength": 25,
+    "srt_count": 1,
+    "gpu_acceleration": true,
+    "message": "Video blurred successfully"
+  }
 }
 ```
 
@@ -144,12 +191,41 @@ Content-Type: application/json
 ```bash
 POST /subtitle
 Content-Type: application/json
+```
 
+**Request Body** (Choose one of the following):
+
+**Option 1: Using `video_id` with `srt_content` (NEW - Recommended)**
+```json
 {
-  "video_path": "uploads/video.mp4",
-  "srt_path": "uploads/output.srt",
+  "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+  "srt_content": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle 1\n\n2\n00:00:06,000 --> 00:00:10,000\nSubtitle 2",
   "output_suffix": "subtitled",
   "use_gpu": true
+}
+```
+
+**Option 2: Using `video_path` with `srt_content` (Backward compatible - recommended over srt_path)**
+```json
+{
+  "video_path": "uploads/video.mp4",
+  "srt_content": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle 1\n\n2\n00:00:06,000 --> 00:00:10,000\nSubtitle 2",
+  "output_suffix": "subtitled",
+  "use_gpu": true
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "output_path": "uploads/video_subtitled.mp4",
+    "video_path": "uploads/video.mp4",
+    "srt_path": "srt_temp/srt_a1b2c3d4-e5f6.srt",
+    "gpu_acceleration": true,
+    "message": "Video processed successfully"
+  }
 }
 ```
 
@@ -158,14 +234,63 @@ Content-Type: application/json
 ```bash
 POST /blur-and-subtitle
 Content-Type: application/json
+```
 
+**Request Body** (Choose one of the following):
+
+**Option 1: Using `video_id` with `srt_content` (NEW - Recommended)**
+```json
 {
-  "video_path": "uploads/video.mp4",
-  "srt_path": "uploads/output.srt",
-  "srt_detail": [...],
+  "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+  "srt_content": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle 1\n\n2\n00:00:06,000 --> 00:00:10,000\nSubtitle 2",
+  "srt_detail": [
+    {
+      "x1": 100,
+      "y1": 950,
+      "x2": 1820,
+      "y2": 1050,
+      "srt_time": "00:00:01,000 --> 00:00:05,000"
+    }
+  ],
   "blur_strength": 25,
   "output_suffix": "vnsrt",
   "use_gpu": true
+}
+```
+
+**Option 2: Using `video_path` with `srt_content` (Backward compatible)**
+```json
+{
+  "video_path": "uploads/video.mp4",
+  "srt_content": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle 1\n\n2\n00:00:06,000 --> 00:00:10,000\nSubtitle 2",
+  "srt_detail": [
+    {
+      "x1": 100,
+      "y1": 950,
+      "x2": 1820,
+      "y2": 1050,
+      "srt_time": "00:00:01,000 --> 00:00:05,000"
+    }
+  ],
+  "blur_strength": 25,
+  "output_suffix": "vnsrt",
+  "use_gpu": true
+}
+```
+
+**Response:**
+```json
+{
+  "status": "success",
+  "data": {
+    "output_path": "uploads/video_vnsrt.mp4",
+    "video_path": "uploads/video.mp4",
+    "srt_path": "srt_temp/srt_a1b2c3d4-e5f6.srt",
+    "blur_strength": 25,
+    "srt_count": 2,
+    "gpu_acceleration": true,
+    "message": "Video processed successfully"
+  }
 }
 ```
 

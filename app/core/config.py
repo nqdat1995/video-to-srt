@@ -89,5 +89,8 @@ class Settings:
    
    # SRT output settings
    SRT_OUTPUT_DIR: str = os.getenv("SRT_OUTPUT_DIR", "./srt_output")
+   
+   # SRT temporary files settings
+   SRT_TEMP_DIR: str = os.getenv("SRT_TEMP_DIR", "./srt_temp")
 
 settings = Settings()

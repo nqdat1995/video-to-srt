@@ -140,19 +140,53 @@ def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/blur")
-def blur(req: BlurRequest):
+def blur(req: BlurRequest, db: Session = Depends(get_db)):
     """
     Blur regions in video based on coordinates
 
     Args:
         req: Blur request
+        db: Database session
 
     Returns:
         Response with output video path and stats
     """
     try:
-        result = video_processor.blur_video(req)
+        # Determine which video path to use
+        video_path = None
+        
+        if req.video_id:
+            # Priority 1: video_id - fetch from database
+            video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
+            if not video:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Video with ID {req.video_id} not found or has been deleted"
+                )
+            video_path = video.file_path
+        elif req.video_path:
+            # Priority 2: video_path - use provided path
+            video_path = req.video_path
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either video_id or video_path must be provided"
+            )
+        
+        # Create a modified request with resolved video_path
+        modified_req = BlurRequest(
+            video_path=video_path,
+            video_id=None,
+            srt_detail=req.srt_detail,
+            blur_strength=req.blur_strength,
+            output_suffix=req.output_suffix,
+            use_gpu=req.use_gpu
+        )
+        
+        result = video_processor.blur_video(modified_req)
         return {"status": "success", "data": result}
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -160,19 +194,54 @@ def blur(req: BlurRequest):
 
 
 @router.post("/subtitle")
-def subtitle(req: SubtitleRequest):
+def subtitle(req: SubtitleRequest, db: Session = Depends(get_db)):
     """
     Add SRT subtitles to video
 
     Args:
         req: Subtitle request
+        db: Database session
 
     Returns:
         Response with output video path and stats
     """
     try:
-        result = video_processor.add_subtitles(req)
-        return {"status": "success", "data": result}
+        # Determine which video path to use
+        video_path = None
+        
+        if req.video_id:
+            # Priority 1: video_id - fetch from database
+            video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
+            if not video:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Video with ID {req.video_id} not found or has been deleted"
+                )
+            video_path = video.file_path
+        elif req.video_path:
+            # Priority 2: video_path - use provided path
+            video_path = req.video_path
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either video_id or video_path must be provided"
+            )
+        
+        # Write srt_content to temporary file
+        temp_srt_path = _create_temp_srt_file(req.srt_content)
+        
+        try:
+            # Set the resolved paths
+            req.video_path = video_path
+            req.srt_path = temp_srt_path
+            
+            result = video_processor.add_subtitles(req)
+            return {"status": "success", "data": result}
+        finally:
+            # Clean up temporary SRT file
+            _cleanup_temp_srt_file(temp_srt_path)
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -180,19 +249,54 @@ def subtitle(req: SubtitleRequest):
 
 
 @router.post("/blur-and-subtitle")
-def blur_and_subtitle(req: BlurAndSubtitleRequest):
+def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)):
     """
     Blur original subtitles and add new SRT to video (combined operation)
 
     Args:
         req: Blur and subtitle request
+        db: Database session
 
     Returns:
         Response with output video path and stats
     """
     try:
-        result = video_processor.blur_and_add_subtitles(req)
-        return {"status": "success", "data": result}
+        # Determine which video path to use
+        video_path = None
+        
+        if req.video_id:
+            # Priority 1: video_id - fetch from database
+            video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
+            if not video:
+                raise HTTPException(
+                    status_code=404,
+                    detail=f"Video with ID {req.video_id} not found or has been deleted"
+                )
+            video_path = video.file_path
+        elif req.video_path:
+            # Priority 2: video_path - use provided path
+            video_path = req.video_path
+        else:
+            raise HTTPException(
+                status_code=400,
+                detail="Either video_id or video_path must be provided"
+            )
+        
+        # Write srt_content to temporary file
+        temp_srt_path = _create_temp_srt_file(req.srt_content)
+        
+        try:
+            # Set the resolved paths
+            req.video_path = video_path
+            req.srt_path = temp_srt_path
+            
+            result = video_processor.blur_and_add_subtitles(req)
+            return {"status": "success", "data": result}
+        finally:
+            # Clean up temporary SRT file
+            _cleanup_temp_srt_file(temp_srt_path)
+    except HTTPException:
+        raise
     except FileNotFoundError as e:
         raise HTTPException(status_code=404, detail=str(e))
     except Exception as e:
@@ -638,3 +742,49 @@ def delete_video(
             status_code=500,
             detail=f"Failed to delete video: {str(e)}",
         )
+
+
+def _create_temp_srt_file(srt_content: str) -> str:
+    """
+    Create a temporary SRT file from content string
+
+    Args:
+        srt_content: SRT subtitle content
+
+    Returns:
+        Path to the temporary SRT file
+
+    Raises:
+        ValueError: If srt_content is empty
+    """
+    if not srt_content or not srt_content.strip():
+        raise ValueError("SRT content cannot be empty")
+    
+    # Ensure temp directory exists
+    temp_dir = Path(settings.SRT_TEMP_DIR)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    temp_filename = f"srt_{uuid.uuid4()}.srt"
+    temp_srt_path = temp_dir / temp_filename
+    
+    # Write content to file
+    with open(temp_srt_path, 'w', encoding='utf-8') as f:
+        f.write(srt_content)
+    
+    return str(temp_srt_path)
+
+
+def _cleanup_temp_srt_file(temp_srt_path: str) -> None:
+    """
+    Clean up temporary SRT file
+
+    Args:
+        temp_srt_path: Path to the temporary SRT file
+    """
+    try:
+        if temp_srt_path and os.path.exists(temp_srt_path):
+            os.remove(temp_srt_path)
+    except Exception:
+        # Silently ignore cleanup errors
+        pass
