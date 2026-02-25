@@ -25,7 +25,6 @@ from ..models.responses import (
     VideoUploadResponse,
     UserQuotaResponse,
 )
-from ..models.database import Video
 from ..services.video_processor import video_processor
 from ..services.tts_service import (
     TTSService,
@@ -34,6 +33,7 @@ from ..services.tts_service import (
     TTSError,
 )
 from ..services.storage_service import storage_service
+from ..services.database_service import database_service
 from ..core.config import settings
 from ..core.database import get_db
 
@@ -67,10 +67,7 @@ def extract_srt(req: ExtractRequest, db: Session = Depends(get_db)):
     
     if req.video_id:
         # Priority 1: video_id - fetch from database
-        video = db.query(Video).filter(
-            Video.id == req.video_id,
-            Video.is_deleted == False
-        ).first()
+        video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
         
         if not video:
             raise HTTPException(
@@ -113,10 +110,7 @@ def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
     
     if req.video_id:
         # Priority 1: video_id - fetch from database
-        video = db.query(Video).filter(
-            Video.id == req.video_id,
-            Video.is_deleted == False
-        ).first()
+        video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
         
         if not video:
             raise HTTPException(

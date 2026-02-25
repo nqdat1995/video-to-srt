@@ -2,13 +2,12 @@
 
 import os
 import shutil
-from datetime import datetime
+from datetime import datetime, timedelta
 from pathlib import Path
 from typing import Optional, List
 from sqlalchemy.orm import Session
-from sqlalchemy import and_, desc, func
 
-from ..models.database import Video, UserQuota
+from .database_service import database_service
 from ..core.config import settings
 
 
@@ -27,7 +26,7 @@ class StorageService:
         file_path: str,
         original_filename: str,
         file_size: int,
-    ) -> Video:
+    ) -> any:
         """
         Save video metadata to database and handle quota management.
         
@@ -44,73 +43,38 @@ class StorageService:
         Returns:
             Video object saved to database
         """
-        # Check if user exists in quota table
-        user_quota = db.query(UserQuota).filter(
-            UserQuota.user_id == user_id
-        ).first()
-
-        if not user_quota:
-            user_quota = UserQuota(user_id=user_id, video_count=0, total_size_bytes=0)
-            db.add(user_quota)
-            db.flush()
+        # Get or create user quota
+        user_quota = database_service.get_or_create_user_quota(db, user_id)
 
         # Get current non-deleted video count
-        current_count = db.query(Video).filter(
-            and_(
-                Video.user_id == user_id,
-                Video.is_deleted == False
-            )
-        ).count()
+        current_count = database_service.get_user_videos_count(db, user_id, include_deleted=False)
 
         # If at or over limit, delete oldest videos
         if current_count >= settings.MAX_VIDEOS_PER_USER:
             videos_to_delete = current_count - settings.MAX_VIDEOS_PER_USER + 1
-            oldest_videos = db.query(Video).filter(
-                and_(
-                    Video.user_id == user_id,
-                    Video.is_deleted == False
-                )
-            ).order_by(Video.created_at).limit(videos_to_delete).all()
+            oldest_videos = database_service.get_user_oldest_videos(db, user_id, videos_to_delete)
 
             for old_video in oldest_videos:
                 self._delete_video_files(old_video)
-                old_video.is_deleted = True
-                old_video.deleted_at = datetime.utcnow()
-                # Deduct from quota
-                user_quota.video_count = max(0, user_quota.video_count - 1)
-                user_quota.total_size_bytes = max(0, user_quota.total_size_bytes - old_video.file_size)
-            db.flush()
+                database_service.soft_delete_video(db, old_video.id, user_id)
+
+            database_service.flush(db)
 
         # Create new video record
-        video = Video(
-            id=video_id,
+        video = database_service.create_video(
+            db=db,
+            video_id=video_id,
             user_id=user_id,
             filename=original_filename,
             file_path=file_path,
             file_size=file_size,
-            is_deleted=False,
-            created_at=datetime.utcnow(),
         )
-        db.add(video)
-        db.flush()
 
-        # Update user quota with accurate count
-        user_quota.video_count = db.query(Video).filter(
-            and_(
-                Video.user_id == user_id,
-                Video.is_deleted == False
-            )
-        ).count()
-        user_quota.total_size_bytes = db.query(Video).filter(
-            and_(
-                Video.user_id == user_id,
-                Video.is_deleted == False
-            )
-        ).with_entities(func.sum(Video.file_size)).scalar() or 0
-        user_quota.last_updated = datetime.utcnow()
+        # Refresh user quota with accurate count and size
+        database_service.refresh_user_quota(db, user_id)
 
-        db.commit()
-        db.refresh(video)
+        database_service.commit(db)
+        database_service.refresh(db, video)
         return video
 
     def get_user_videos(
@@ -118,7 +82,7 @@ class StorageService:
         db: Session,
         user_id: str,
         include_deleted: bool = False,
-    ) -> List[Video]:
+    ) -> List:
         """
         Get all videos for a user.
 
@@ -130,19 +94,14 @@ class StorageService:
         Returns:
             List of Video objects
         """
-        query = db.query(Video).filter(Video.user_id == user_id)
-
-        if not include_deleted:
-            query = query.filter(Video.is_deleted == False)
-
-        return query.order_by(desc(Video.created_at)).all()
+        return database_service.get_user_videos(db, user_id, include_deleted)
 
     def get_video(
         self,
         db: Session,
         video_id: str,
         user_id: Optional[str] = None,
-    ) -> Optional[Video]:
+    ) -> Optional:
         """
         Get a specific video by ID.
 
@@ -154,12 +113,7 @@ class StorageService:
         Returns:
             Video object or None if not found
         """
-        query = db.query(Video).filter(Video.id == video_id)
-
-        if user_id:
-            query = query.filter(Video.user_id == user_id)
-
-        return query.first()
+        return database_service.get_video_by_id(db, video_id, user_id, include_deleted=False)
 
     def delete_video(
         self,
@@ -180,12 +134,8 @@ class StorageService:
         Returns:
             True if successful, False otherwise
         """
-        video = db.query(Video).filter(
-            and_(
-                Video.id == video_id,
-                Video.user_id == user_id,
-            )
-        ).first()
+        # Get video to delete
+        video = database_service.get_video_by_id(db, video_id, user_id, include_deleted=False)
 
         if not video:
             return False
@@ -193,31 +143,14 @@ class StorageService:
         if hard_delete:
             self._delete_video_files(video)
 
-        video.is_deleted = True
-        video.deleted_at = datetime.utcnow()
-        db.flush()
+        # Soft delete the video
+        database_service.soft_delete_video(db, video_id, user_id)
+        database_service.flush(db)
 
         # Update quota with accurate count
-        user_quota = db.query(UserQuota).filter(
-            UserQuota.user_id == user_id
-        ).first()
+        database_service.refresh_user_quota(db, user_id)
 
-        if user_quota:
-            user_quota.video_count = db.query(Video).filter(
-                and_(
-                    Video.user_id == user_id,
-                    Video.is_deleted == False
-                )
-            ).count()
-            user_quota.total_size_bytes = db.query(Video).filter(
-                and_(
-                    Video.user_id == user_id,
-                    Video.is_deleted == False
-                )
-            ).with_entities(func.sum(Video.file_size)).scalar() or 0
-            user_quota.last_updated = datetime.utcnow()
-
-        db.commit()
+        database_service.commit(db)
         return True
 
     def _delete_video_files(self, video: Video) -> None:
@@ -247,24 +180,19 @@ class StorageService:
         Returns:
             Number of videos cleaned up
         """
-        cutoff_date = datetime.utcnow() - datetime.timedelta(days=days)
-        old_deleted_videos = db.query(Video).filter(
-            and_(
-                Video.is_deleted == True,
-                Video.deleted_at <= cutoff_date,
-            )
-        ).all()
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        old_deleted_videos = database_service.get_deleted_videos_by_cutoff_date(db, cutoff_date)
 
         count = 0
         for video in old_deleted_videos:
             self._delete_video_files(video)
-            db.delete(video)
+            database_service.hard_delete_video(db, video.id)
             count += 1
 
-        db.commit()
+        database_service.commit(db)
         return count
 
-    def get_user_quota(self, db: Session, user_id: str) -> Optional[UserQuota]:
+    def get_user_quota(self, db: Session, user_id: str) -> Optional:
         """
         Get user quota information.
 
@@ -275,9 +203,7 @@ class StorageService:
         Returns:
             UserQuota object or None
         """
-        return db.query(UserQuota).filter(
-            UserQuota.user_id == user_id
-        ).first()
+        return database_service.get_user_quota(db, user_id)
 
 
 # Singleton instance
