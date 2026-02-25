@@ -86,5 +86,8 @@ class Settings:
    MAX_VIDEOS_PER_USER: int = int(os.getenv("MAX_VIDEOS_PER_USER", "10"))
    MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
    ALLOWED_VIDEO_FORMATS: list = ["mp4", "avi", "mov", "mkv", "flv", "wmv", "webm"]
+   
+   # SRT output settings
+   SRT_OUTPUT_DIR: str = os.getenv("SRT_OUTPUT_DIR", "./srt_output")
 
 settings = Settings()

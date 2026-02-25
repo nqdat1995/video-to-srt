@@ -13,6 +13,10 @@ Key environment variables for tuning:
 | `BATCH_OCR_SIZE` | `8` | 1-32 | OCR batch size |
 | `LOG_LEVEL` | `WARNING` | DEBUG, INFO, WARNING, ERROR | Logging verbosity |
 | `DEFAULT_CONF_MIN` | `0.5` | 0.0-1.0 | Min confidence threshold |
+| `UPLOAD_DIR` | `./uploads` | path | Directory to store uploaded videos |
+| `MAX_VIDEOS_PER_USER` | `10` | 1-1000 | Max videos allowed per user |
+| `MAX_UPLOAD_SIZE_MB` | `500` | 1-5000 | Max file size in MB |
+| `SRT_OUTPUT_DIR` | `./srt_output` | path | **NEW** Directory to auto-save extracted SRT files |
 
 ## Tuning for Speed
 
@@ -71,6 +75,7 @@ DATABASE_URL=postgresql://video_user:video_password@localhost:5432/video_srt_db
 UPLOAD_DIR=./uploads
 MAX_VIDEOS_PER_USER=10
 MAX_UPLOAD_SIZE_MB=500
+SRT_OUTPUT_DIR=./srt_output
 
 # PaddleOCR Fixes
 FLAGS_use_mkldnn=0

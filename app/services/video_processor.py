@@ -165,6 +165,9 @@ class VideoProcessor:
         self,
         req: ExtractRequest,
         progress_callback: Optional[Callable[[float], None]] = None,
+        video_path: Optional[str] = None,
+        original_filename: Optional[str] = None,
+        auto_save_srt: bool = False,
     ) -> ExtractResponse:
         """
         Process video and extract subtitles
@@ -172,6 +175,9 @@ class VideoProcessor:
         Args:
             req: Extraction request
             progress_callback: Optional callback for progress updates
+            video_path: Optional video file path (overrides req.video if provided)
+            original_filename: Original filename for auto-save SRT naming
+            auto_save_srt: Whether to auto-save SRT to configured output directory
 
         Returns:
             Extraction response with SRT and stats
@@ -183,26 +189,45 @@ class VideoProcessor:
 
         update_progress(0.0)
 
+        # Use provided video_path or fall back to req.video
+        effective_video_path = video_path or req.video
+
         # Validate input
-        if not os.path.isfile(req.video):
+        if not os.path.isfile(effective_video_path):
             raise FileNotFoundError("Video path not found or not a file")
 
         update_progress(0.05)
 
         # Try fast path with subtitle streams
-        streams = self.ffmpeg_service.probe_subtitle_streams(req.video)
+        streams = self.ffmpeg_service.probe_subtitle_streams(effective_video_path)
         if req.prefer_subtitle_stream and streams:
-            return self._extract_from_stream(req, streams)
+            return self._extract_from_stream(
+                req, 
+                streams, 
+                effective_video_path,
+                original_filename,
+                auto_save_srt
+            )
 
         update_progress(0.15)
 
         # OCR path
-        return self._extract_with_ocr(req, streams, update_progress)
+        return self._extract_with_ocr(
+            req, 
+            streams, 
+            update_progress,
+            effective_video_path,
+            original_filename,
+            auto_save_srt
+        )
 
     def process_video_fullfps(
         self,
         req: ExtractRequest,
         progress_callback: Optional[Callable[[float], None]] = None,
+        video_path: Optional[str] = None,
+        original_filename: Optional[str] = None,
+        auto_save_srt: bool = False,
     ) -> ExtractResponse:
         """
         Process video and extract subtitles by running OCR on every sampled frame
@@ -210,6 +235,13 @@ class VideoProcessor:
         This mode disables the visual hash gating skip (so OCR runs on each sampled
         frame at `target_fps`) and merges consecutive frames with identical text
         into cues based on textual similarity.
+        
+        Args:
+            req: Extraction request
+            progress_callback: Optional callback for progress updates
+            video_path: Optional video file path (overrides req.video if provided)
+            original_filename: Original filename for auto-save SRT naming
+            auto_save_srt: Whether to auto-save SRT to configured output directory
         """
         def update_progress(progress: float):
             if progress_callback:
@@ -217,16 +249,25 @@ class VideoProcessor:
 
         update_progress(0.0)
 
+        # Use provided video_path or fall back to req.video
+        effective_video_path = video_path or req.video
+
         # Validate input
-        if not os.path.isfile(req.video):
+        if not os.path.isfile(effective_video_path):
             raise FileNotFoundError("Video path not found or not a file")
 
         update_progress(0.05)
 
         # Try fast path with subtitle streams (honor prefer_subtitle_stream)
-        streams = self.ffmpeg_service.probe_subtitle_streams(req.video)
+        streams = self.ffmpeg_service.probe_subtitle_streams(effective_video_path)
         if req.prefer_subtitle_stream and streams:
-            return self._extract_from_stream(req, streams)
+            return self._extract_from_stream(
+                req, 
+                streams,
+                effective_video_path,
+                original_filename,
+                auto_save_srt
+            )
 
         update_progress(0.15)
 
@@ -241,34 +282,59 @@ class VideoProcessor:
 
         update_progress(0.20)
 
-        cap = cv2.VideoCapture(req.video)
+        cap = cv2.VideoCapture(effective_video_path)
         if not cap.isOpened():
             raise RuntimeError("Cannot open video")
 
         try:
-            return self._process_video_frames(cap, req, entry, streams, update_progress, full_fps_mode=True)
+            return self._process_video_frames(
+                cap, 
+                req, 
+                entry, 
+                streams, 
+                update_progress, 
+                full_fps_mode=True,
+                video_path=effective_video_path,
+                original_filename=original_filename,
+                auto_save_srt=auto_save_srt
+            )
         finally:
             cap.release()
 
     def _extract_from_stream(
-        self, req: ExtractRequest, streams: List[dict]
+        self, 
+        req: ExtractRequest, 
+        streams: List[dict],
+        video_path: str,
+        original_filename: Optional[str] = None,
+        auto_save_srt: bool = False,
     ) -> ExtractResponse:
         """Extract subtitles from existing stream"""
-        out_path = req.output_path or (req.video + ".srt")
+        from ..core.config import settings
+        
+        # Determine output path
+        if auto_save_srt and original_filename:
+            # Auto-save: use configured SRT output directory with original filename
+            os.makedirs(settings.SRT_OUTPUT_DIR, exist_ok=True)
+            base_name = os.path.splitext(original_filename)[0]
+            out_path = os.path.join(settings.SRT_OUTPUT_DIR, f"{base_name}.srt")
+        else:
+            # Default: save in same directory as video with .srt extension
+            out_path = video_path + ".srt"
 
         try:
             self.ffmpeg_service.extract_stream_subtitle_to_srt(
-                req.video, out_path, stream_index=0
+                video_path, out_path, stream_index=0
             )
             with open(out_path, "r", encoding="utf-8", errors="replace") as f:
                 srt_text = f.read()
 
             return ExtractResponse(
                 srt=srt_text,
+                srt_output_path=out_path if auto_save_srt else None,
                 stats={
                     "mode": "subtitle_stream",
                     "streams": streams,
-                    "output_path": out_path,
                 },
             )
         except Exception as e:
@@ -279,6 +345,9 @@ class VideoProcessor:
         req: ExtractRequest,
         streams: List[dict],
         update_progress: Callable[[float], None],
+        video_path: str,
+        original_filename: Optional[str] = None,
+        auto_save_srt: bool = False,
     ) -> ExtractResponse:
         """Extract subtitles using OCR"""
 
@@ -294,12 +363,21 @@ class VideoProcessor:
         update_progress(0.20)
 
         # Open video
-        cap = cv2.VideoCapture(req.video)
+        cap = cv2.VideoCapture(video_path)
         if not cap.isOpened():
             raise RuntimeError("Cannot open video")
 
         try:
-            return self._process_video_frames(cap, req, entry, streams, update_progress)
+            return self._process_video_frames(
+                cap, 
+                req, 
+                entry, 
+                streams, 
+                update_progress,
+                video_path=video_path,
+                original_filename=original_filename,
+                auto_save_srt=auto_save_srt
+            )
         finally:
             cap.release()
 
@@ -311,8 +389,13 @@ class VideoProcessor:
         streams: List[dict],
         update_progress: Callable[[float], None],
         full_fps_mode: bool = False,
+        video_path: Optional[str] = None,
+        original_filename: Optional[str] = None,
+        auto_save_srt: bool = False,
     ) -> ExtractResponse:
         """Process video frames and extract subtitles"""
+        from ..core.config import settings
+        
         print("Current target FPS:", req.target_fps)
         # Get video properties
         src_fps = float(cap.get(cv2.CAP_PROP_FPS) or 0.0)
@@ -394,10 +477,14 @@ class VideoProcessor:
         srt_text = self.srt_service.cues_to_srt(cues)
         srt_details = self.srt_service.generate_srt_details(cues)
 
-        # Save if requested
-        if req.output_path:
-            os.makedirs(os.path.dirname(req.output_path) or ".", exist_ok=True)
-            with open(req.output_path, "w", encoding="utf-8") as f:
+        # Determine output path for auto-save
+        srt_output_path = None
+        if auto_save_srt and original_filename:
+            # Auto-save: use configured SRT output directory with original filename
+            os.makedirs(settings.SRT_OUTPUT_DIR, exist_ok=True)
+            base_name = os.path.splitext(original_filename)[0]
+            srt_output_path = os.path.join(settings.SRT_OUTPUT_DIR, f"{base_name}.srt")
+            with open(srt_output_path, "w", encoding="utf-8") as f:
                 f.write(srt_text)
 
         update_progress(0.98)
@@ -423,14 +510,16 @@ class VideoProcessor:
                 "active_top": active_top,
                 "active_bottom": active_bottom,
             },
-            "output_path": req.output_path,
             "subtitle_streams_found": streams,
         }
 
         update_progress(1.0)
 
         return ExtractResponse(
-            srt=srt_text, srt_detail=srt_details, stats=response_stats
+            srt=srt_text, 
+            srt_detail=srt_details, 
+            stats=response_stats,
+            srt_output_path=srt_output_path
         )
 
     def _ocr_loop(

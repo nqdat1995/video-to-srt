@@ -1,7 +1,7 @@
 """Request models for API endpoints"""
 
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 from ..core.config import settings
 
@@ -9,7 +9,7 @@ from ..core.config import settings
 class ExtractRequest(BaseModel):
    """Request model for subtitle extraction"""
 
-   video: str = Field(..., description="Local path to video on server")
+   video: Optional[str] = Field(None, description="Local path to video on server (use either this or video_id)")
 
    # Sampling / ROI
    target_fps: float = Field(settings.DEFAULT_TARGET_FPS, gt=0.1, le=30.0)
@@ -55,10 +55,16 @@ class ExtractRequest(BaseModel):
        False, 
        description="If subtitle stream exists, extract via ffmpeg instead of OCR"
    )
-   output_path: Optional[str] = Field(
-       None, 
-       description="If set, write .srt to this path on server"
+   video_id: Optional[str] = Field(
+       None,
+       description="Video ID from /upload-video endpoint. If provided, system will fetch video path from database and auto-save SRT to configured output directory"
    )
+
+   @field_validator('video', 'video_id', mode='before')
+   @classmethod
+   def validate_video_source(cls, v):
+       """Ensure validator passes through values as-is"""
+       return v
 
 
 class BlurRequest(BaseModel):

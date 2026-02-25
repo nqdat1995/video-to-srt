@@ -21,6 +21,7 @@ class ExtractResponse(BaseModel):
    srt: str
    srt_detail: List[SrtDetail] = []
    stats: Dict[str, Any]
+   srt_output_path: Optional[str] = Field(None, description="Path where SRT file was saved (if auto-saved)")
 
 
 class TaskStatusResponse(BaseModel):

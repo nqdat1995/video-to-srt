@@ -26,7 +26,23 @@ All responses include:
 ```bash
 POST /extract-srt
 Content-Type: application/json
+```
 
+**Request Body** (Choose one of the following):
+
+**Option 1: Using `video_id` (from /upload-video endpoint)**
+```json
+{
+  "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+  "lang": "vi",
+  "device": "cpu",
+  "target_fps": 4.0,
+  "conf_min": 0.5
+}
+```
+
+**Option 2: Using `video` (local file path)**
+```json
 {
   "video": "uploads/sample.mp4",
   "lang": "vi",
@@ -36,14 +52,37 @@ Content-Type: application/json
 }
 ```
 
-**Response**: `ExtractResponse`
+**Note on Priority:**
+- If both `video_id` and `video` are provided, `video_id` takes priority
+- If `video_id` is provided, the system will:
+  1. Query the database to fetch the video file path
+  2. Return error 404 if video not found
+  3. Automatically save the extracted SRT to the configured `SRT_OUTPUT_DIR` directory
+  4. Include `srt_output_path` in the response
+- If only `video` is provided, SRT is returned in response only (no auto-save)
+
+**Response**: `ExtractResponse` with optional `srt_output_path`
 
 ### Full-FPS Extraction
 
 ```bash
 POST /extract-srt-frames
 Content-Type: application/json
+```
 
+**Request Body** (same options as `/extract-srt`):
+
+**Option 1: Using `video_id`**
+```json
+{
+  "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+  "lang": "vi",
+  "target_fps": 4.0
+}
+```
+
+**Option 2: Using `video`**
+```json
 {
   "video": "uploads/sample.mp4",
   "lang": "vi",
@@ -51,7 +90,7 @@ Content-Type: application/json
 }
 ```
 
-**Response**: `ExtractResponse`
+**Response**: `ExtractResponse` with optional `srt_output_path`
 
 ### Asynchronous Extraction
 
@@ -227,9 +266,16 @@ DELETE /video/{video_id}?user_id=user_id
       "height": int,
       "src_fps": float
     }
-  }
+  },
+  "srt_output_path": "string|null"
 }
 ```
+
+**Field Descriptions:**
+- `srt`: Complete SRT subtitle text
+- `srt_detail`: Array of detailed subtitle information with bounding box coordinates
+- `stats`: Processing statistics
+- `srt_output_path`: (NEW) Path where SRT file was saved on server (only when using `video_id`)
 
 ### TaskStatusResponse
 

@@ -25,6 +25,7 @@ from ..models.responses import (
     VideoUploadResponse,
     UserQuotaResponse,
 )
+from ..models.database import Video
 from ..services.video_processor import video_processor
 from ..services.tts_service import (
     TTSService,
@@ -50,21 +51,56 @@ def health():
 
 
 @router.post("/extract-srt", response_model=ExtractResponse)
-def extract_srt(req: ExtractRequest):
+def extract_srt(req: ExtractRequest, db: Session = Depends(get_db)):
     """
     Synchronous subtitle extraction endpoint
 
     Args:
         req: Extraction request
+        db: Database session
 
     Returns:
         Extraction response with SRT and stats
     """
-    return video_processor.process_video(req)
+    # Determine which video path to use
+    video_path = None
+    
+    if req.video_id:
+        # Priority 1: video_id - fetch from database
+        video = db.query(Video).filter(
+            Video.id == req.video_id,
+            Video.is_deleted == False
+        ).first()
+        
+        if not video:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video with ID {req.video_id} not found or has been deleted"
+            )
+        video_path = video.file_path
+        original_filename = video.filename
+    elif req.video:
+        # Priority 2: video - use provided path
+        video_path = req.video
+        original_filename = None
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either video_id or video must be provided"
+        )
+    
+    # Process video
+    result = video_processor.process_video(
+        req, 
+        video_path=video_path,
+        original_filename=original_filename,
+        auto_save_srt=(req.video_id is not None)
+    )
+    return result
 
 
 @router.post("/extract-srt-frames", response_model=ExtractResponse)
-def extract_srt_frames(req: ExtractRequest):
+def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
     """
     Synchronous full-FPS subtitle extraction: runs OCR on every sampled frame
 
@@ -72,7 +108,41 @@ def extract_srt_frames(req: ExtractRequest):
     frame. Consecutive sampled frames with identical or similar OCR text
     (based on `sim_thr`) are merged into a single SRT cue.
     """
-    return video_processor.process_video_fullfps(req)
+    # Determine which video path to use
+    video_path = None
+    
+    if req.video_id:
+        # Priority 1: video_id - fetch from database
+        video = db.query(Video).filter(
+            Video.id == req.video_id,
+            Video.is_deleted == False
+        ).first()
+        
+        if not video:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video with ID {req.video_id} not found or has been deleted"
+            )
+        video_path = video.file_path
+        original_filename = video.filename
+    elif req.video:
+        # Priority 2: video - use provided path
+        video_path = req.video
+        original_filename = None
+    else:
+        raise HTTPException(
+            status_code=400,
+            detail="Either video_id or video must be provided"
+        )
+    
+    # Process video with full-fps mode
+    result = video_processor.process_video_fullfps(
+        req, 
+        video_path=video_path,
+        original_filename=original_filename,
+        auto_save_srt=(req.video_id is not None)
+    )
+    return result
 
 
 @router.post("/blur")

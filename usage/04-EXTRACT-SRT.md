@@ -10,7 +10,29 @@ curl http://localhost:8000/health
 
 ## 1. Synchronous Extraction (Blocking)
 
-### cURL Example
+### Using `video_id` from /upload-video (Recommended for Database Videos)
+
+```bash
+curl -X POST "http://localhost:8000/extract-srt" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+    "lang": "vi",
+    "device": "cpu",
+    "target_fps": 4.0,
+    "conf_min": 0.5
+  }'
+
+# Response includes srt_output_path showing where SRT was auto-saved:
+# {
+#   "srt": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle text\n\n...",
+#   "srt_output_path": "./srt_output/sample.srt",
+#   "srt_detail": [...],
+#   "stats": {...}
+# }
+```
+
+### Using `video` (Direct File Path)
 
 ```bash
 curl -X POST "http://localhost:8000/extract-srt" \
@@ -23,9 +45,10 @@ curl -X POST "http://localhost:8000/extract-srt" \
     "conf_min": 0.5
   }'
 
-# Response:
+# Response: (srt_output_path will be null)
 # {
 #   "srt": "1\n00:00:01,000 --> 00:00:05,000\nSubtitle text\n\n...",
+#   "srt_output_path": null,
 #   "srt_detail": [
 #     {
 #       "srt": "Subtitle text",
@@ -45,11 +68,34 @@ curl -X POST "http://localhost:8000/extract-srt" \
 # }
 ```
 
-### Python Client
+### Python Client Example
 
 ```python
 import requests
 
+# Example 1: Using video_id (auto-saves to configured SRT_OUTPUT_DIR)
+response = requests.post(
+    "http://localhost:8000/extract-srt",
+    json={
+        "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+        "lang": "vi",
+        "device": "cpu",
+        "target_fps": 4.0,
+        "conf_min": 0.5
+    }
+)
+
+data = response.json()
+srt_content = data["srt"]
+srt_detail = data["srt_detail"]  # Include coordinates
+srt_output_path = data["srt_output_path"]  # Where file was saved
+stats = data["stats"]
+
+print(f"Extracted {len(srt_detail)} subtitle blocks")
+print(f"Auto-saved to: {srt_output_path}")
+print(f"Time taken: {stats['timing_ms']['total']/1000:.2f}s")
+
+# Example 2: Using video (no auto-save, manual save)
 response = requests.post(
     "http://localhost:8000/extract-srt",
     json={
@@ -63,13 +109,8 @@ response = requests.post(
 
 data = response.json()
 srt_content = data["srt"]
-srt_detail = data["srt_detail"]  # Include coordinates
-stats = data["stats"]
 
-print(f"Extracted {len(srt_detail)} subtitle blocks")
-print(f"Time taken: {stats['timing_ms']['total']/1000:.2f}s")
-
-# Save to file
+# Save manually
 with open("output.srt", "w", encoding="utf-8") as f:
     f.write(srt_content)
 ```
@@ -77,6 +118,22 @@ with open("output.srt", "w", encoding="utf-8") as f:
 ## 2. Full-FPS Extraction
 
 Process OCR on every sampled frame and merge consecutive identical text:
+
+### Using `video_id`
+
+```bash
+curl -X POST "http://localhost:8000/extract-srt-frames" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "video_id": "a1b2c3d4-e5f6-47g8-h9i0-j1k2l3m4n5o6",
+    "lang": "vi",
+    "device": "cpu",
+    "target_fps": 4.0,
+    "conf_min": 0.5
+  }'
+```
+
+### Using `video`
 
 ```bash
 curl -X POST "http://localhost:8000/extract-srt-frames" \
@@ -88,9 +145,9 @@ curl -X POST "http://localhost:8000/extract-srt-frames" \
     "target_fps": 4.0,
     "conf_min": 0.5
   }'
-
-# Response structure identical to /extract-srt
 ```
+
+Response structure identical to `/extract-srt`
 
 ## 3. Asynchronous Extraction (Non-blocking)
 
