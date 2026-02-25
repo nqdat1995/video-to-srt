@@ -9,12 +9,17 @@
 - Modular architecture dễ maintain và extend
 - Configurable caching và performance settings
 - Production-ready với proper error handling
+- **Video Upload API** với PostgreSQL storage
+- **Quota Management** tự động xóa video cũ khi vượt quá giới hạn
+- **User Tracking** với GUID-based video identification
 
 ## Kiến trúc hệ thống (System Architecture)
 
 ### Công nghệ sử dụng (Tech Stack)
 
 - **FastAPI 0.128.1**: Web framework cho API endpoints
+- **PostgreSQL 16**: Database cho lưu trữ video metadata
+- **SQLAlchemy 2.0+**: ORM để quản lý database
 - **PaddleOCR 2.7.0.3**: Engine OCR chính (hỗ trợ đa ngôn ngữ, stable version)
 - **PaddlePaddle 3.0.0**: ML framework backend (optimized for stability)
 - **OpenCV (cv2)**: Xử lý video và hình ảnh
@@ -469,6 +474,95 @@ def tts_generate(req: TTSGenerateRequest)
   "message": "Audio synthesis completed successfully"
 }
 ```
+
+#### 7.9 Video Upload Endpoint with Quota Management
+```python
+@router.post("/upload-video", response_model=VideoUploadResponse)
+async def upload_video(
+    file: UploadFile = File(...),
+    user_id: str = None,
+    db: Session = Depends(get_db)
+)
+```
+- **Purpose**: Tải lên video và lưu trữ metadata vào PostgreSQL
+- **Features**:
+  1. Upload file video lên server với GUID-based naming
+  2. Lưu metadata (filename, size, upload time) vào database
+  3. Tự động quản lý quota: xóa video cũ nếu vượt quá `MAX_VIDEOS_PER_USER`
+  4. Đánh dấu deleted videos với `is_deleted` flag
+  5. Trả về GUID để sử dụng cho các tác vụ khác
+
+- **Quota Management**: 
+  - Mỗi user được upload tối đa `MAX_VIDEOS_PER_USER` video (default: 10)
+  - Khi vượt quá giới hạn, video cũ nhất (oldest created_at) sẽ bị xóa tự động
+  - Xóa file từ disk và set `is_deleted=true` trong database
+
+- **Request Parameters**:
+
+| Parameter | Type | Required | Description |
+|-----------|------|----------|-------------|
+| `file` | File | Yes | Video file (multipart) |
+| `user_id` | string | No | User identifier (auto-generate GUID if not provided) |
+
+- **Allowed Formats**: mp4, avi, mov, mkv, flv, wmv, webm (configurable in `ALLOWED_VIDEO_FORMATS`)
+- **Max File Size**: 500MB (configurable via `MAX_UPLOAD_SIZE_MB`)
+- **Database**: PostgreSQL `videos` table stores metadata with indexes on user_id
+
+**Response**:
+```json
+{
+  "id": "550e8400-e29b-41d4-a716-446655440000",
+  "user_id": "abcd1234-ef56-7890-ghij-klmnopqrstuv",
+  "filename": "video.mp4",
+  "file_size": 1048576,
+  "created_at": "2026-02-25T10:30:45.123456",
+  "status": "success",
+  "message": "Video uploaded successfully. ID: 550e8400-e29b-41d4-a716-446655440000"
+}
+```
+
+#### 7.10 Get User Quota Endpoint
+```python
+@router.get("/user/{user_id}/quota", response_model=UserQuotaResponse)
+def get_user_quota(user_id: str, db: Session = Depends(get_db))
+```
+- **Purpose**: Lấy thông tin quota hiện tại của user
+- **Response**: Video count, remaining quota, total size, max allowed
+
+**Response**:
+```json
+{
+  "user_id": "abcd1234-ef56-7890-ghij-klmnopqrstuv",
+  "video_count": 7,
+  "max_videos": 10,
+  "remaining_quota": 3,
+  "total_size_bytes": 5242880000,
+  "last_updated": "2026-02-25T10:30:45.123456"
+}
+```
+
+#### 7.11 Get User Videos List
+```python
+@router.get("/user/{user_id}/videos")
+def get_user_videos(user_id: str, include_deleted: bool = False, db: Session = Depends(get_db))
+```
+- **Purpose**: Liệt kê tất cả video của user
+- **Parameters**:
+  - `user_id`: User identifier
+  - `include_deleted`: Bao gồm các video đã xóa (default: false)
+- **Order**: Sắp xếp theo created_at mới nhất trước
+
+#### 7.12 Delete Video Endpoint
+```python
+@router.delete("/video/{video_id}")
+def delete_video(video_id: str, user_id: str, db: Session = Depends(get_db))
+```
+- **Purpose**: Xóa video (soft delete + hard delete file)
+- **Authorization**: Chỉ user owner mới được xóa
+- **Action**:
+  1. Set `is_deleted=true` trong database
+  2. Xóa file từ disk
+  3. Update user quota
 
 #### Subtitle Extraction Request Parameters (23 tunable parameters):
 

@@ -44,3 +44,26 @@ class TTSGenerateResponse(BaseModel):
    duration_ms: float = Field(..., description="Audio duration in milliseconds")
    size_bytes: int = Field(..., description="Audio file size in bytes")
    message: Optional[str] = Field(None, description="Additional message or error details")
+
+
+class VideoUploadResponse(BaseModel):
+   """Response model for video upload"""
+
+   id: str = Field(..., description="Unique video GUID")
+   user_id: str = Field(..., description="User identifier")
+   filename: str = Field(..., description="Original filename")
+   file_size: int = Field(..., description="File size in bytes")
+   created_at: str = Field(..., description="Upload timestamp (ISO format)")
+   status: str = Field("success", description="Upload status")
+   message: Optional[str] = Field(None, description="Additional message")
+
+
+class UserQuotaResponse(BaseModel):
+   """Response model for user quota information"""
+
+   user_id: str = Field(..., description="User identifier")
+   video_count: int = Field(..., description="Number of non-deleted videos")
+   max_videos: int = Field(..., description="Maximum videos allowed per user")
+   remaining_quota: int = Field(..., description="Remaining videos before cleanup")
+   total_size_bytes: int = Field(..., description="Total size of all videos in bytes")
+   last_updated: str = Field(..., description="Last quota update timestamp (ISO format)")

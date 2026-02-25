@@ -98,3 +98,8 @@ class TTSGenerateRequest(BaseModel):
    tts_voice: str = Field("BV074_streaming", description="Voice identifier for TTS synthesis")
    output_filename: Optional[str] = Field(None, description="Output audio filename (default: auto-generated)")
    return_base64: bool = Field(True, description="Return audio as base64 encoded string")
+
+class VideoUploadRequest(BaseModel):
+   """Request model for video file upload"""
+
+   user_id: Optional[str] = Field(None, description="User identifier (if not provided, generated from session)")

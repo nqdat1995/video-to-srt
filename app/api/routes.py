@@ -4,9 +4,12 @@ import time
 import threading
 import uuid
 import os
+from pathlib import Path
+from datetime import datetime
 from typing import Dict
 
-from fastapi import APIRouter, HTTPException, BackgroundTasks
+from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Depends, Query
+from sqlalchemy.orm import Session
 
 from ..models.requests import (
     ExtractRequest,
@@ -15,7 +18,13 @@ from ..models.requests import (
     SubtitleRequest,
     TTSGenerateRequest,
 )
-from ..models.responses import ExtractResponse, TaskStatusResponse, TTSGenerateResponse
+from ..models.responses import (
+    ExtractResponse,
+    TaskStatusResponse,
+    TTSGenerateResponse,
+    VideoUploadResponse,
+    UserQuotaResponse,
+)
 from ..services.video_processor import video_processor
 from ..services.tts_service import (
     TTSService,
@@ -23,7 +32,9 @@ from ..services.tts_service import (
     merge_wav_files,
     TTSError,
 )
+from ..services.storage_service import storage_service
 from ..core.config import settings
+from ..core.database import get_db
 
 router = APIRouter()
 
@@ -349,3 +360,217 @@ def tts_generate(req: TTSGenerateRequest):
         raise HTTPException(status_code=400, detail=f"Invalid input: {str(e)}")
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"TTS generation failed: {str(e)}")
+
+@router.post("/upload-video", response_model=VideoUploadResponse)
+async def upload_video(
+    file: UploadFile = File(...),
+    user_id: str = None,
+    db: Session = Depends(get_db),
+):
+    """
+    Upload a video file with quota management.
+    
+    - Stores file in UPLOAD_DIR with GUID-based naming
+    - Stores metadata in PostgreSQL database
+    - Automatically deletes oldest videos if user exceeds MAX_VIDEOS_PER_USER
+    - Marks deleted videos with is_deleted flag in database
+
+    Args:
+        file: Video file to upload
+        user_id: Optional user identifier (if not provided, generates a new GUID)
+        db: Database session
+
+    Returns:
+        VideoUploadResponse with video ID (GUID) and metadata
+    """
+    try:
+        # Generate user_id if not provided
+        if not user_id:
+            user_id = str(uuid.uuid4())
+
+        # Validate file format
+        file_ext = Path(file.filename).suffix.lower().lstrip(".")
+        if file_ext not in settings.ALLOWED_VIDEO_FORMATS:
+            raise HTTPException(
+                status_code=400,
+                detail=f"Invalid file format. Allowed formats: {', '.join(settings.ALLOWED_VIDEO_FORMATS)}",
+            )
+
+        # Read file and validate size
+        file_content = await file.read()
+        file_size = len(file_content)
+
+        max_size_bytes = settings.MAX_UPLOAD_SIZE_MB * 1024 * 1024
+        if file_size > max_size_bytes:
+            raise HTTPException(
+                status_code=413,
+                detail=f"File too large. Maximum size: {settings.MAX_UPLOAD_SIZE_MB}MB",
+            )
+
+        if file_size == 0:
+            raise HTTPException(
+                status_code=400,
+                detail="File is empty",
+            )
+
+        # Generate GUID for video
+        video_id = str(uuid.uuid4())
+
+        # Save file to disk with GUID-based naming
+        upload_dir = Path(settings.UPLOAD_DIR)
+        upload_dir.mkdir(parents=True, exist_ok=True)
+
+        file_path = upload_dir / f"{video_id}.{file_ext}"
+        with open(file_path, "wb") as f:
+            f.write(file_content)
+
+        # Save metadata to database (handles quota management and cleanup)
+        video = storage_service.save_video(
+            db=db,
+            video_id=video_id,
+            user_id=user_id,
+            file_path=str(file_path),
+            original_filename=file.filename,
+            file_size=file_size,
+        )
+
+        return VideoUploadResponse(
+            id=video.id,
+            user_id=video.user_id,
+            filename=video.filename,
+            file_size=video.file_size,
+            created_at=video.created_at.isoformat(),
+            status="success",
+            message=f"Video uploaded successfully. ID: {video_id}",
+        )
+
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to upload video: {str(e)}",
+        )
+
+
+@router.get("/user/{user_id}/quota", response_model=UserQuotaResponse)
+def get_user_quota(user_id: str, db: Session = Depends(get_db)):
+    """
+    Get user's current upload quota and usage.
+
+    Args:
+        user_id: User identifier
+        db: Database session
+
+    Returns:
+        UserQuotaResponse with quota information
+    """
+    try:
+        user_quota = storage_service.get_user_quota(db, user_id)
+
+        if not user_quota:
+            return UserQuotaResponse(
+                user_id=user_id,
+                video_count=0,
+                max_videos=settings.MAX_VIDEOS_PER_USER,
+                remaining_quota=settings.MAX_VIDEOS_PER_USER,
+                total_size_bytes=0,
+                last_updated=datetime.utcnow().isoformat(),
+            )
+
+        remaining_quota = max(
+            0,
+            settings.MAX_VIDEOS_PER_USER - user_quota.video_count,
+        )
+
+        return UserQuotaResponse(
+            user_id=user_quota.user_id,
+            video_count=user_quota.video_count,
+            max_videos=settings.MAX_VIDEOS_PER_USER,
+            remaining_quota=remaining_quota,
+            total_size_bytes=user_quota.total_size_bytes,
+            last_updated=user_quota.last_updated.isoformat(),
+        )
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get quota: {str(e)}",
+        )
+
+
+@router.get("/user/{user_id}/videos")
+def get_user_videos(
+    user_id: str,
+    include_deleted: bool = Query(False),
+    db: Session = Depends(get_db)
+):
+    """
+    Get all videos for a user.
+
+    Args:
+        user_id: User identifier
+        include_deleted: Whether to include soft-deleted videos (query param)
+        db: Database session
+
+    Returns:
+        List of videos
+    """
+    try:
+        videos = storage_service.get_user_videos(db, user_id, include_deleted)
+        return {
+            "user_id": user_id,
+            "total_count": len(videos),
+            "videos": [
+                {
+                    "id": v.id,
+                    "filename": v.filename,
+                    "file_size": v.file_size,
+                    "created_at": v.created_at.isoformat(),
+                    "is_deleted": v.is_deleted,
+                    "deleted_at": v.deleted_at.isoformat() if v.deleted_at else None,
+                }
+                for v in videos
+            ],
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to get videos: {str(e)}",
+        )
+
+
+@router.delete("/video/{video_id}")
+def delete_video(
+    video_id: str,
+    user_id: str = Query(...),
+    db: Session = Depends(get_db)
+):
+    """
+    Delete a video (soft delete by default).
+
+    Args:
+        video_id: Video GUID
+        user_id: User identifier for permission check (query param)
+        db: Database session
+
+    Returns:
+        Success message
+    """
+    try:
+        success = storage_service.delete_video(db, video_id, user_id, hard_delete=True)
+        if not success:
+            raise HTTPException(
+                status_code=404,
+                detail="Video not found or not authorized",
+            )
+        return {
+            "status": "success",
+            "message": f"Video {video_id} deleted successfully",
+        }
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Failed to delete video: {str(e)}",
+        )

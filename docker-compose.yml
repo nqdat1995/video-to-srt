@@ -7,8 +7,31 @@ volumes:
       type: none
       device: /run/desktop/mnt/host/d/LEARN/n8n/exchange_data
       o: bind,uid=1000,gid=1000,rw
+  postgres_data:
+    driver: local
 
 services:
+  # PostgreSQL database for video metadata
+  postgres:
+    image: postgres:16-alpine
+    container_name: video-to-srt-db
+    environment:
+      POSTGRES_DB: video_srt_db
+      POSTGRES_USER: video_user
+      POSTGRES_PASSWORD: video_password
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    networks:
+      - video-to-srt-network
+    restart: unless-stopped
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U video_user -d video_srt_db"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
   # CPU-only service (default)
   video-to-srt:
     build:
@@ -20,6 +43,9 @@ services:
     container_name: video-to-srt
     ports:
       - "8000:8000"
+    depends_on:
+      postgres:
+        condition: service_healthy
     volumes:
       # # Mount uploads directory for video files
       # - ./uploads:/app/uploads
@@ -35,6 +61,10 @@ services:
       - HOST=0.0.0.0
       - PORT=8000
       - WORKERS=1
+      # Database settings
+      - DATABASE_URL=postgresql://video_user:video_password@postgres:5432/video_srt_db
+      - MAX_VIDEOS_PER_USER=10
+      - UPLOAD_DIR=/app/uploads
       # OCR settings
       - DEFAULT_DEVICE=cpu
       - DEFAULT_LANG=ch

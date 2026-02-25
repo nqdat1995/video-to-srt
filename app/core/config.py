@@ -77,4 +77,14 @@ class Settings:
    TTS_TEMP_DIR: str = os.getenv("TTS_TEMP_DIR", "./tts_temp")
    TTS_BATCH_SIZE: int = int(os.getenv("TTS_BATCH_SIZE", "1000"))
    TTS_MAX_RETRIES: int = int(os.getenv("TTS_MAX_RETRIES", "3"))
+
+   # Database settings
+   DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://video_user:video_password@localhost:5432/video_srt_db")
+   
+   # Upload settings
+   UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")
+   MAX_VIDEOS_PER_USER: int = int(os.getenv("MAX_VIDEOS_PER_USER", "10"))
+   MAX_UPLOAD_SIZE_MB: int = int(os.getenv("MAX_UPLOAD_SIZE_MB", "500"))
+   ALLOWED_VIDEO_FORMATS: list = ["mp4", "avi", "mov", "mkv", "flv", "wmv", "webm"]
+
 settings = Settings()

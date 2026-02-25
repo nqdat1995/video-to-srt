@@ -25,6 +25,15 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from .api.routes import router
 from .core.config import settings
+from .core.database import init_db
+
+# Initialize database tables on startup
+try:
+    init_db()
+    print("✓ Database tables initialized successfully")
+except Exception as e:
+    print(f"✗ Failed to initialize database: {str(e)}")
+    raise
 
 # Create FastAPI app
 app = FastAPI(
