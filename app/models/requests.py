@@ -74,6 +74,7 @@ class BlurRequest(BaseModel):
    video_id: Optional[str] = Field(None, description="Video ID from /upload-video endpoint")
    srt_detail: list = Field(..., description="List of SRT detail objects with coordinates (x1, y1, x2, y2)")
    blur_strength: int = Field(25, ge=1, le=100, description="Blur strength (higher = more blur)")
+   blur_expansion_percent: int = Field(0, ge=0, le=10, description="Blur region expansion percentage (0-10%)")
    output_suffix: str = Field("blurred", description="Output file suffix")
    use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
 
@@ -98,6 +99,7 @@ class BlurAndSubtitleRequest(BaseModel):
    srt_path: Optional[str] = Field(None, description="Internal: Path to SRT file (auto-generated from srt_content)")
    srt_detail: list = Field(..., description="List of SRT detail objects with coordinates (x1, y1, x2, y2)")
    blur_strength: int = Field(25, ge=1, le=100, description="Blur strength (higher = more blur)")
+   blur_expansion_percent: int = Field(0, ge=0, le=10, description="Blur region expansion percentage (0-10%)")
    output_suffix: str = Field("vnsrt", description="Output file suffix")
    use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
 

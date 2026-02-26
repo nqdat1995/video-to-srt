@@ -179,6 +179,7 @@ def blur(req: BlurRequest, db: Session = Depends(get_db)):
             video_id=None,
             srt_detail=req.srt_detail,
             blur_strength=req.blur_strength,
+            blur_expansion_percent=req.blur_expansion_percent,
             output_suffix=req.output_suffix,
             use_gpu=req.use_gpu
         )

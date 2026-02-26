@@ -187,6 +187,7 @@ class FfmpegService:
         srt_path: str,
         srt_detail: list,
         blur_strength: int = 25,
+        blur_expansion_percent: int = 0,
         output_suffix: str = "vnsrt",
         use_gpu: bool = True,
     ) -> str:
@@ -199,6 +200,7 @@ class FfmpegService:
             srt_path: Path to SRT file to add (can be None for blur only)
             srt_detail: List of SRT detail objects with coordinates and srt_time
             blur_strength: Blur strength (1-100)
+            blur_expansion_percent: Blur region expansion percentage (0-10%)
             output_suffix: Output file suffix
             use_gpu: Enable GPU acceleration if available
 
@@ -233,7 +235,7 @@ class FfmpegService:
         # Build filter chain with timing-aware blur processing
         # Use segment-based approach: blur regions are applied only during specified time ranges
         filter_chain, final_label = FfmpegService._build_segment_blur_filter_chain(
-            srt_detail, width, height, blur_radius, srt_path_fixed
+            srt_detail, width, height, blur_radius, srt_path_fixed, blur_expansion_percent
         )
 
         # Build ffmpeg command
@@ -327,10 +329,12 @@ class FfmpegService:
         video_height: int,
         blur_radius: int,
         srt_path: str,
+        blur_expansion_percent: int = 0,
     ):
         """
         Build filter chain that:
         - Crops each region, blurs it, and overlays back at (x1,y1)
+        - Expands blur region by blur_expansion_percent before clamping to video boundaries
         - Uses enable='between(t,START,END)' to restrict blur to srt_time
         - Uses split=2 per-region so both outputs are consumed (no unconnected outputs)
         - Always returns (filter_chain, final_label)
@@ -371,11 +375,36 @@ class FfmpegService:
                 start_time = round(start_time, 3)
                 end_time = round(end_time, 3)
                 
-                # clamp coords
+                # clamp coords first
                 x1 = max(0, min(x1, video_width - 2))
                 y1 = max(0, min(y1, video_height - 2))
                 x2 = max(x1 + 1, min(x2, video_width))
                 y2 = max(y1 + 1, min(y2, video_height))
+
+                box_w = x2 - x1
+                box_h = y2 - y1
+
+                # Apply expansion if specified
+                if blur_expansion_percent > 0:
+                    # Calculate expanded dimensions
+                    expanded_w = int(box_w * (1 + blur_expansion_percent / 100))
+                    expanded_h = int(box_h * (1 + blur_expansion_percent / 100))
+                    
+                    # Calculate center of original box
+                    center_x = x1 + box_w / 2
+                    center_y = y1 + box_h / 2
+                    
+                    # Calculate new coordinates centered on original box
+                    x1_expanded = int(center_x - expanded_w / 2)
+                    y1_expanded = int(center_y - expanded_h / 2)
+                    x2_expanded = x1_expanded + expanded_w
+                    y2_expanded = y1_expanded + expanded_h
+                    
+                    # Clamp expanded coordinates to video boundaries
+                    x1 = max(0, min(x1_expanded, video_width - 2))
+                    y1 = max(0, min(y1_expanded, video_height - 2))
+                    x2 = max(x1 + 1, min(x2_expanded, video_width))
+                    y2 = max(y1 + 1, min(y2_expanded, video_height))
 
                 box_w = x2 - x1
                 box_h = y2 - y1

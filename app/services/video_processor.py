@@ -68,6 +68,7 @@ class VideoProcessor:
             srt_path=req.srt_path,
             srt_detail=req.srt_detail,
             blur_strength=req.blur_strength,
+            blur_expansion_percent=req.blur_expansion_percent,
             output_suffix=req.output_suffix,
             use_gpu=use_gpu,
         )
@@ -108,6 +109,7 @@ class VideoProcessor:
             srt_path=None,  # No subtitles, only blur
             srt_detail=req.srt_detail,
             blur_strength=req.blur_strength,
+            blur_expansion_percent=req.blur_expansion_percent,
             output_suffix=req.output_suffix,
             use_gpu=use_gpu,
         )
