@@ -149,11 +149,12 @@ def blur(req: BlurRequest, db: Session = Depends(get_db)):
         db: Database session
 
     Returns:
-        Response with output video path and stats
+        Response with new video ID (output video saved to database)
     """
     try:
-        # Determine which video path to use
+        # Determine which video path to use and get user_id
         video_path = None
+        user_id = None
         
         if req.video_id:
             # Priority 1: video_id - fetch from database
@@ -164,9 +165,12 @@ def blur(req: BlurRequest, db: Session = Depends(get_db)):
                     detail=f"Video with ID {req.video_id} not found or has been deleted"
                 )
             video_path = video.file_path
+            user_id = video.user_id
         elif req.video_path:
             # Priority 2: video_path - use provided path
             video_path = req.video_path
+            # Generate a user_id if not available (for local files)
+            user_id = str(uuid.uuid4())
         else:
             raise HTTPException(
                 status_code=400,
@@ -185,7 +189,31 @@ def blur(req: BlurRequest, db: Session = Depends(get_db)):
         )
         
         result = video_processor.blur_video(modified_req)
-        return {"status": "success", "data": result}
+        output_path = result["output_path"]
+        
+        # Save output video to database
+        output_file_path = Path(output_path)
+        output_file_size = output_file_path.stat().st_size if output_file_path.exists() else 0
+        output_video_id = str(uuid.uuid4())
+        
+        output_video = storage_service.save_video(
+            db=db,
+            video_id=output_video_id,
+            user_id=user_id,
+            file_path=str(output_path),
+            original_filename=f"{output_file_path.stem}_blurred{output_file_path.suffix}",
+            file_size=output_file_size,
+        )
+        
+        return {
+            "status": "success",
+            "video_id": output_video.id,
+            "blur_strength": req.blur_strength,
+            "blur_expansion_percent": req.blur_expansion_percent,
+            "srt_count": len(req.srt_detail) if req.srt_detail else 0,
+            "gpu_acceleration": result.get("gpu_acceleration", False),
+            "message": "Video blurred successfully"
+        }
     except HTTPException:
         raise
     except FileNotFoundError as e:
@@ -259,11 +287,12 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
         db: Database session
 
     Returns:
-        Response with output video path and stats
+        Response with new video ID (output video saved to database)
     """
     try:
-        # Determine which video path to use
+        # Determine which video path to use and get user_id
         video_path = None
+        user_id = None
         
         if req.video_id:
             # Priority 1: video_id - fetch from database
@@ -274,9 +303,12 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
                     detail=f"Video with ID {req.video_id} not found or has been deleted"
                 )
             video_path = video.file_path
+            user_id = video.user_id
         elif req.video_path:
             # Priority 2: video_path - use provided path
             video_path = req.video_path
+            # Generate a user_id if not available (for local files)
+            user_id = str(uuid.uuid4())
         else:
             raise HTTPException(
                 status_code=400,
@@ -292,7 +324,31 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
             req.srt_path = temp_srt_path
             
             result = video_processor.blur_and_add_subtitles(req)
-            return {"status": "success", "data": result}
+            output_path = result["output_path"]
+            
+            # Save output video to database
+            output_file_path = Path(output_path)
+            output_file_size = output_file_path.stat().st_size if output_file_path.exists() else 0
+            output_video_id = str(uuid.uuid4())
+            
+            output_video = storage_service.save_video(
+                db=db,
+                video_id=output_video_id,
+                user_id=user_id,
+                file_path=str(output_path),
+                original_filename=f"{output_file_path.stem}_vnsrt{output_file_path.suffix}",
+                file_size=output_file_size,
+            )
+            
+            return {
+                "status": "success",
+                "video_id": output_video.id,
+                "blur_strength": req.blur_strength,
+                "blur_expansion_percent": req.blur_expansion_percent,
+                "srt_count": len(req.srt_detail) if req.srt_detail else 0,
+                "gpu_acceleration": result.get("gpu_acceleration", False),
+                "message": "Video blurred and subtitled successfully"
+            }
         finally:
             # Clean up temporary SRT file
             _cleanup_temp_srt_file(temp_srt_path)
