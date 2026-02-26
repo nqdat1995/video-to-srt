@@ -88,6 +88,9 @@ class SubtitleRequest(BaseModel):
    srt_path: Optional[str] = Field(None, description="Internal: Path to SRT file (auto-generated from srt_content)")
    output_suffix: str = Field("subtitled", description="Output file suffix")
    use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
+   fontname: str = Field("Arial", description="Subtitle font name")
+   fontsize: int = Field(10, ge=1, le=100, description="Subtitle font size in points")
+   subtitle_y_position: int = Field(90, ge=0, le=100, description="Vertical position of subtitle as percentage (0=top, 100=bottom)")
 
 
 class BlurAndSubtitleRequest(BaseModel):
@@ -102,6 +105,9 @@ class BlurAndSubtitleRequest(BaseModel):
    blur_expansion_percent: int = Field(0, ge=0, le=10, description="Blur region expansion percentage (0-10%)")
    output_suffix: str = Field("vnsrt", description="Output file suffix")
    use_gpu: bool = Field(True, description="Enable GPU acceleration if available")
+   fontname: str = Field("Arial", description="Subtitle font name")
+   fontsize: int = Field(10, ge=1, le=100, description="Subtitle font size in points")
+   subtitle_y_position: int = Field(90, ge=0, le=100, description="Vertical position of subtitle as percentage (0=top, 100=bottom")
 
 
 class TTSGenerateRequest(BaseModel):

@@ -189,8 +189,8 @@ class FfmpegService:
         blur_strength: int = 25,
         blur_expansion_percent: int = 0,
         output_suffix: str = "vnsrt",
-        use_gpu: bool = True,
-    ) -> str:
+        use_gpu: bool = True,        fontname: str = "Arial",
+        fontsize: int = 10,    ) -> str:
         """
         Blur original subtitles and/or add new SRT with precise timing using segment-based approach
         Splits video into segments (before blur, blur region, after blur) and reconstructes
@@ -203,6 +203,8 @@ class FfmpegService:
             blur_expansion_percent: Blur region expansion percentage (0-10%)
             output_suffix: Output file suffix
             use_gpu: Enable GPU acceleration if available
+            fontname: Subtitle font name
+            fontsize: Subtitle font size in points
 
         Returns:
             Path to output video
@@ -216,7 +218,7 @@ class FfmpegService:
 
         srt_path_fixed = None
         if srt_path:
-            srt_path_fixed = str(Path(srt_path).resolve())
+            srt_path_fixed = str(Path(srt_path))
             srt_path_fixed = srt_path_fixed.replace("\\", "/")
 
         # Get video dimensions
@@ -235,7 +237,7 @@ class FfmpegService:
         # Build filter chain with timing-aware blur processing
         # Use segment-based approach: blur regions are applied only during specified time ranges
         filter_chain, final_label = FfmpegService._build_segment_blur_filter_chain(
-            srt_detail, width, height, blur_radius, srt_path_fixed, blur_expansion_percent
+            srt_detail, width, height, blur_radius, srt_path_fixed, blur_expansion_percent, fontname, fontsize
         )
 
         # Build ffmpeg command
@@ -330,6 +332,8 @@ class FfmpegService:
         blur_radius: int,
         srt_path: str,
         blur_expansion_percent: int = 0,
+        fontname: str = "Arial",
+        fontsize: int = 10,
     ):
         """
         Build filter chain that:
@@ -343,7 +347,7 @@ class FfmpegService:
         if not srt_detail:
             if srt_path:
                 return (
-                    f"[0:v]format=yuv420p,subtitles=filename='{srt_path}':force_style='FontName=Arial,FontSize=20'[vout]",
+                    f"[0:v]format=yuv420p,subtitles=filename={srt_path}[vout]",
                     "vout",
                 )
             else:
@@ -444,7 +448,7 @@ class FfmpegService:
         # Attach subtitles if provided
         if srt_path:
             parts.append(
-                f"[{current_label}]subtitles=filename='{srt_path}':force_style='FontName=Arial,FontSize=20'[vout]"
+                f"[{current_label}]subtitles=filename={srt_path}[vout]"
             )
             final_label = "vout"
         else:

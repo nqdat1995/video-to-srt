@@ -129,6 +129,124 @@ class SrtService:
        
        return srt_details
 
+   @staticmethod
+   def srt_to_ass(srt_content: str, fontname: str = "Arial", fontsize: int = 20, subtitle_y_position: int = 90) -> str:
+       """
+       Convert SRT subtitle content to ASS (Advanced SubStation Alpha) format with styling
+
+       Args:
+           srt_content: SRT subtitle content
+           fontname: Font name for subtitles
+           fontsize: Font size for subtitles
+           subtitle_y_position: Vertical position as percentage (0=top, 100=bottom)
+
+       Returns:
+           ASS format subtitle content
+       """
+       lines = srt_content.strip().split('\n')
+       
+       # Calculate alignment and MarginV based on subtitle_y_position
+       # Alignment values: 1-9 like numpad
+       # 1=bottom-left, 2=bottom-center, 3=bottom-right
+       # 4=middle-left, 5=middle-center, 6=middle-right
+       # 7=top-left, 8=top-center, 9=top-right
+       
+       if subtitle_y_position <= 33:  # Top
+           alignment = 8  # top-center
+           margin_v = int(subtitle_y_position * 2.5)  # Scale for top position
+       elif subtitle_y_position <= 66:  # Middle
+           alignment = 5  # middle-center
+           margin_v = int((50 - abs(50 - subtitle_y_position)) * 2.5)  # Scale for middle
+       else:  # Bottom
+           alignment = 2  # bottom-center
+           margin_v = int((100 - subtitle_y_position) * 2.5)  # Scale for bottom position
+       
+       # ASS header with calculated alignment and margin
+       ass_content = f"""[Script Info]
+Title: Default Aegisub file
+ScriptType: v4.00+
+
+[V4+ Styles]
+Format: Name, Fontname, Fontsize, PrimaryColour, SecondaryColour, OutlineColour, BackColour, Bold, Italic, Underline, StrikeOut, ScaleX, ScaleY, Spacing, Angle, BorderStyle, Outline, Shadow, Alignment, MarginL, MarginR, MarginV, Encoding
+Style: Default,{fontname},{fontsize},&H00FFFFFF,&H000000FF,&H00000000,&H00000000,0,0,0,0,100,100,0,0,1,2,0,{alignment},0,0,{margin_v},1
+
+[Events]
+Format: Layer, Start, End, Style, Name, MarginL, MarginR, MarginV, Effect, Text
+"""
+       
+       i = 0
+       while i < len(lines):
+           line = lines[i].strip()
+           
+           # Skip empty lines
+           if not line:
+               i += 1
+               continue
+           
+           # Check if this is a cue number (numeric line)
+           if line.isdigit():
+               i += 1
+               if i < len(lines):
+                   time_line = lines[i].strip()
+                   if '-->' in time_line:
+                       # Parse timing
+                       parts = time_line.split('-->')
+                       if len(parts) == 2:
+                           start = parts[0].strip()
+                           end = parts[1].strip()
+                           
+                           # Convert SRT time format (HH:MM:SS,mmm) to ASS format (H:MM:SS.cc)
+                           start_ass = SrtService._convert_time_to_ass(start)
+                           end_ass = SrtService._convert_time_to_ass(end)
+                           
+                           i += 1
+                           # Collect text lines
+                           text_lines = []
+                           while i < len(lines) and lines[i].strip() and not lines[i].strip().isdigit():
+                               text_lines.append(lines[i].strip())
+                               i += 1
+                           
+                           text = '\\N'.join(text_lines)  # ASS uses \N for newlines
+                           ass_content += f"Dialogue: 0,{start_ass},{end_ass},Default,,0,0,0,,{text}\n"
+                   else:
+                       i += 1
+           else:
+               i += 1
+       
+       return ass_content
+
+   @staticmethod
+   def _convert_time_to_ass(time_str: str) -> str:
+       """
+       Convert SRT time format (HH:MM:SS,mmm) to ASS format (H:MM:SS.cc)
+       
+       Args:
+           time_str: Time in SRT format
+           
+       Returns:
+           Time in ASS format
+       """
+       # Remove trailing spaces
+       time_str = time_str.strip()
+       
+       # Replace comma with period
+       time_str = time_str.replace(',', '.')
+       
+       # Parse components
+       parts = time_str.split(':')
+       if len(parts) == 3:
+           hours = int(parts[0])
+           minutes = int(parts[1])
+           seconds_parts = parts[2].split('.')
+           seconds = int(seconds_parts[0])
+           milliseconds = int(seconds_parts[1][:2]) if len(seconds_parts) > 1 else 0
+           
+           # ASS format: H:MM:SS.cc (cc = centiseconds)
+           centiseconds = milliseconds // 10
+           return f"{hours}:{minutes:02d}:{seconds:02d}.{centiseconds:02d}"
+       
+       return time_str
+
 
 # Singleton instance
 srt_service = SrtService()

@@ -71,6 +71,8 @@ class VideoProcessor:
             blur_expansion_percent=req.blur_expansion_percent,
             output_suffix=req.output_suffix,
             use_gpu=use_gpu,
+            fontname=req.fontname,
+            fontsize=req.fontsize,
         )
 
         return {
@@ -80,6 +82,8 @@ class VideoProcessor:
             "blur_strength": req.blur_strength,
             "srt_count": len(req.srt_detail) if req.srt_detail else 0,
             "gpu_acceleration": use_gpu,
+            "fontname": req.fontname,
+            "fontsize": req.fontsize,
             "message": "Video processed successfully",
         }
 
@@ -153,6 +157,8 @@ class VideoProcessor:
             blur_strength=0,  # No blur
             output_suffix=req.output_suffix,
             use_gpu=use_gpu,
+            fontname=req.fontname,
+            fontsize=req.fontsize,
         )
 
         return {
@@ -160,6 +166,8 @@ class VideoProcessor:
             "video_path": req.video_path,
             "srt_path": req.srt_path,
             "gpu_acceleration": use_gpu,
+            "fontname": req.fontname,
+            "fontsize": req.fontsize,
             "message": "Subtitles added successfully",
         }
 

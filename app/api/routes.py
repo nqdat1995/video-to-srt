@@ -232,11 +232,12 @@ def subtitle(req: SubtitleRequest, db: Session = Depends(get_db)):
         db: Database session
 
     Returns:
-        Response with output video path and stats
+        Response with new video ID (output video saved to database)
     """
     try:
-        # Determine which video path to use
+        # Determine which video path to use and get user_id
         video_path = None
+        user_id = None
         
         if req.video_id:
             # Priority 1: video_id - fetch from database
@@ -247,17 +248,27 @@ def subtitle(req: SubtitleRequest, db: Session = Depends(get_db)):
                     detail=f"Video with ID {req.video_id} not found or has been deleted"
                 )
             video_path = video.file_path
+            user_id = video.user_id
         elif req.video_path:
             # Priority 2: video_path - use provided path
             video_path = req.video_path
+            # Generate a user_id if not available (for local files)
+            user_id = str(uuid.uuid4())
         else:
             raise HTTPException(
                 status_code=400,
                 detail="Either video_id or video_path must be provided"
             )
         
-        # Write srt_content to temporary file
-        temp_srt_path = _create_temp_srt_file(req.srt_content)
+        # Write srt_content to temporary file (or convert to ASS if fontname/fontsize/y_position provided)
+        from ..services.srt_service import srt_service
+        srt_content = req.srt_content
+        if req.fontname != "Arial" or req.fontsize != 10 or req.subtitle_y_position != 90:
+            # Convert to ASS format with styling
+            srt_content = srt_service.srt_to_ass(req.srt_content, req.fontname, req.fontsize, req.subtitle_y_position)
+            temp_srt_path = _create_temp_subtitle_file(srt_content, "ass")
+        else:
+            temp_srt_path = _create_temp_srt_file(req.srt_content)
         
         try:
             # Set the resolved paths
@@ -265,7 +276,31 @@ def subtitle(req: SubtitleRequest, db: Session = Depends(get_db)):
             req.srt_path = temp_srt_path
             
             result = video_processor.add_subtitles(req)
-            return {"status": "success", "data": result}
+            output_path = result["output_path"]
+            
+            # Save output video to database
+            output_file_path = Path(output_path)
+            output_file_size = output_file_path.stat().st_size if output_file_path.exists() else 0
+            output_video_id = str(uuid.uuid4())
+            
+            output_video = storage_service.save_video(
+                db=db,
+                video_id=output_video_id,
+                user_id=user_id,
+                file_path=str(output_path),
+                original_filename=f"{output_file_path.stem}{output_file_path.suffix}",
+                file_size=output_file_size,
+            )
+            
+            return {
+                "status": "success",
+                "video_id": output_video.id,
+                "fontname": req.fontname,
+                "fontsize": req.fontsize,
+                "subtitle_y_position": req.subtitle_y_position,
+                "gpu_acceleration": result.get("gpu_acceleration", False),
+                "message": "Subtitles added successfully"
+            }
         finally:
             # Clean up temporary SRT file
             _cleanup_temp_srt_file(temp_srt_path)
@@ -315,8 +350,15 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
                 detail="Either video_id or video_path must be provided"
             )
         
-        # Write srt_content to temporary file
-        temp_srt_path = _create_temp_srt_file(req.srt_content)
+        # Write srt_content to temporary file (or convert to ASS if fontname/fontsize/y_position provided)
+        from ..services.srt_service import srt_service
+        srt_content = req.srt_content
+        if req.fontname != "Arial" or req.fontsize != 10 or req.subtitle_y_position != 90:
+            # Convert to ASS format with styling
+            srt_content = srt_service.srt_to_ass(req.srt_content, req.fontname, req.fontsize, req.subtitle_y_position)
+            temp_srt_path = _create_temp_subtitle_file(srt_content, "ass")
+        else:
+            temp_srt_path = _create_temp_srt_file(req.srt_content)
         
         try:
             # Set the resolved paths
@@ -345,6 +387,9 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
                 "video_id": output_video.id,
                 "blur_strength": req.blur_strength,
                 "blur_expansion_percent": req.blur_expansion_percent,
+                "fontname": req.fontname,
+                "fontsize": req.fontsize,
+                "subtitle_y_position": req.subtitle_y_position,
                 "srt_count": len(req.srt_detail) if req.srt_detail else 0,
                 "gpu_acceleration": result.get("gpu_acceleration", False),
                 "message": "Video blurred and subtitled successfully"
@@ -830,6 +875,38 @@ def _create_temp_srt_file(srt_content: str) -> str:
         f.write(srt_content)
     
     return str(temp_srt_path)
+
+
+def _create_temp_subtitle_file(content: str, format: str = "srt") -> str:
+    """
+    Create a temporary subtitle file from content string
+
+    Args:
+        content: Subtitle content
+        format: File format (srt, ass, sub, etc.)
+
+    Returns:
+        Path to the temporary subtitle file
+
+    Raises:
+        ValueError: If content is empty
+    """
+    if not content or not content.strip():
+        raise ValueError("Subtitle content cannot be empty")
+    
+    # Ensure temp directory exists
+    temp_dir = Path(settings.SRT_TEMP_DIR)
+    temp_dir.mkdir(parents=True, exist_ok=True)
+    
+    # Generate unique filename
+    temp_filename = f"srt_{uuid.uuid4()}.{format}"
+    temp_path = temp_dir / temp_filename
+    
+    # Write content to file
+    with open(temp_path, 'w', encoding='utf-8') as f:
+        f.write(content)
+    
+    return str(temp_path)
 
 
 def _cleanup_temp_srt_file(temp_srt_path: str) -> None:
