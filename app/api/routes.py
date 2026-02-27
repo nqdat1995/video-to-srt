@@ -505,7 +505,7 @@ async def delete_task(task_id: str):
 
 
 @router.post("/tts/generate", response_model=TTSGenerateResponse)
-def tts_generate(req: TTSGenerateRequest):
+def tts_generate(req: TTSGenerateRequest, db: Session = Depends(get_db)):
     """
     Generate audio from SRT subtitles using TTS
 
@@ -513,13 +513,15 @@ def tts_generate(req: TTSGenerateRequest):
     1. Parses SRT content into subtitle blocks
     2. Downloads audio files from TTS API for each subtitle
     3. Merges audio files in correct order based on SRT timeline
-    4. Returns the merged audio (optionally as base64)
+    4. Stores audio metadata and file in database
+    5. Returns the merged audio (optionally as base64)
 
     Args:
         req: TTS generation request
+        db: Database session
 
     Returns:
-        TTS response with audio file path and optional base64 data
+        TTS response with audio_id instead of file paths
 
     Raises:
         HTTPException: If TTS is disabled or operation fails
@@ -529,9 +531,12 @@ def tts_generate(req: TTSGenerateRequest):
 
     try:
         task_id = str(uuid.uuid4())
+        audio_id = str(uuid.uuid4())
+        user_id = req.user_id or "anonymous"
 
         # Ensure output directories exist
         os.makedirs(settings.TTS_OUTPUT_DIR, exist_ok=True)
+        os.makedirs(settings.AUDIO_OUTPUT_DIR, exist_ok=True)
         os.makedirs(settings.TTS_TEMP_DIR, exist_ok=True)
 
         # Parse SRT content
@@ -569,9 +574,9 @@ def tts_generate(req: TTSGenerateRequest):
         if not wav_files:
             raise ValueError("No audio files were generated")
 
-        # Generate output filename
-        output_filename = req.output_filename or f"tts_audio_{task_id[:8]}.wav"
-        output_path = os.path.join(settings.TTS_OUTPUT_DIR, output_filename)
+        # Generate output filename with audio_id
+        output_filename = f"{audio_id}.wav"
+        output_path = os.path.join(settings.AUDIO_OUTPUT_DIR, output_filename)
 
         # Merge audio files
         audio_base64_merged = merge_wav_files(wav_files, output_path, subtitles)
@@ -600,7 +605,18 @@ def tts_generate(req: TTSGenerateRequest):
         except Exception:
             duration_ms = 0
 
-        # Use base64 from merge if requested, otherwise encode separately
+        # Save audio metadata to database
+        audio = storage_service.save_audio(
+            db=db,
+            audio_id=audio_id,
+            user_id=user_id,
+            file_path=output_path,
+            filename=output_filename,
+            file_size=file_size,
+            duration_ms=duration_ms,
+        )
+
+        # Use base64 from merge if requested, otherwise None
         audio_base64 = None
         if req.return_base64:
             audio_base64 = audio_base64_merged
@@ -616,8 +632,7 @@ def tts_generate(req: TTSGenerateRequest):
         return TTSGenerateResponse(
             task_id=task_id,
             status="success",
-            audio_filename=output_filename,
-            audio_path=output_path,
+            audio_id=audio_id,
             audio_base64=audio_base64,
             duration_ms=duration_ms,
             size_bytes=file_size,

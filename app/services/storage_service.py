@@ -9,7 +9,7 @@ from sqlalchemy.orm import Session
 
 from .database_service import database_service
 from ..core.config import settings
-from ..models.database import Video
+from ..models.database import Video, Audio
 
 
 class StorageService:
@@ -205,6 +205,183 @@ class StorageService:
             UserQuota object or None
         """
         return database_service.get_user_quota(db, user_id)
+
+    def save_audio(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: str,
+        file_path: str,
+        filename: str,
+        file_size: int,
+        duration_ms: Optional[float] = None,
+    ) -> any:
+        """
+        Save audio metadata to database and handle quota management.
+        
+        If user exceeds MAX_AUDIOS_PER_USER, automatically delete oldest audios.
+
+        Args:
+            db: Database session
+            audio_id: GUID for the audio
+            user_id: User identifier
+            file_path: Full path where audio is saved on disk
+            filename: Audio filename
+            file_size: File size in bytes
+            duration_ms: Duration in milliseconds (optional)
+
+        Returns:
+            Audio object saved to database
+        """
+        # Get or create user quota
+        user_quota = database_service.get_or_create_user_quota(db, user_id)
+
+        # Get current non-deleted audio count
+        current_count = database_service.get_user_audios_count(db, user_id, include_deleted=False)
+
+        # If at or over limit, delete oldest audios
+        if current_count >= settings.MAX_AUDIOS_PER_USER:
+            audios_to_delete = current_count - settings.MAX_AUDIOS_PER_USER + 1
+            oldest_audios = database_service.get_user_oldest_audios(db, user_id, audios_to_delete)
+
+            for old_audio in oldest_audios:
+                self._delete_audio_files(old_audio)
+                database_service.soft_delete_audio(db, old_audio.id, user_id)
+
+            database_service.flush(db)
+
+        # Create new audio record
+        audio = database_service.create_audio(
+            db=db,
+            audio_id=audio_id,
+            user_id=user_id,
+            filename=filename,
+            file_path=file_path,
+            file_size=file_size,
+            duration_ms=duration_ms,
+        )
+
+        # Refresh user quota with accurate count and size
+        database_service.refresh_user_quota(db, user_id)
+
+        database_service.commit(db)
+        database_service.refresh(db, audio)
+        return audio
+
+    def get_user_audios(
+        self,
+        db: Session,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> List:
+        """
+        Get all audios for a user.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+            include_deleted: Whether to include soft-deleted audios
+
+        Returns:
+            List of Audio objects
+        """
+        return database_service.get_user_audios(db, user_id, include_deleted)
+
+    def get_audio(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: Optional[str] = None,
+    ) -> Optional:
+        """
+        Get a specific audio by ID.
+
+        Args:
+            db: Database session
+            audio_id: Audio GUID
+            user_id: Optional user ID for permission check
+
+        Returns:
+            Audio object or None if not found
+        """
+        return database_service.get_audio_by_id(db, audio_id, user_id, include_deleted=False)
+
+    def delete_audio(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: str,
+        hard_delete: bool = False,
+    ) -> bool:
+        """
+        Delete an audio (soft delete by default).
+
+        Args:
+            db: Database session
+            audio_id: Audio GUID
+            user_id: User identifier for permission check
+            hard_delete: If True, delete file from disk; if False, just set is_deleted flag
+
+        Returns:
+            True if successful, False otherwise
+        """
+        # Get audio to delete
+        audio = database_service.get_audio_by_id(db, audio_id, user_id, include_deleted=False)
+
+        if not audio:
+            return False
+
+        if hard_delete:
+            self._delete_audio_files(audio)
+
+        # Soft delete the audio
+        database_service.soft_delete_audio(db, audio_id, user_id)
+        database_service.flush(db)
+
+        # Update quota with accurate count
+        database_service.refresh_user_quota(db, user_id)
+
+        database_service.commit(db)
+        return True
+
+    def _delete_audio_files(self, audio: Audio) -> None:
+        """
+        Delete audio file from disk.
+
+        Args:
+            audio: Audio object with file_path
+        """
+        try:
+            file_path = Path(audio.file_path)
+            if file_path.exists():
+                file_path.unlink()
+        except Exception as e:
+            # Log error but don't raise to avoid breaking the soft-delete operation
+            import logging
+            logging.warning(f"Failed to delete audio file {audio.file_path}: {str(e)}")
+
+    def cleanup_deleted_audios(self, db: Session, days: int = 30) -> int:
+        """
+        Hard-delete audios marked as deleted for more than N days.
+
+        Args:
+            db: Database session
+            days: Number of days to keep deleted audios
+
+        Returns:
+            Number of audios cleaned up
+        """
+        cutoff_date = datetime.utcnow() - timedelta(days=days)
+        old_deleted_audios = database_service.get_deleted_audios_by_cutoff_date(db, cutoff_date)
+
+        count = 0
+        for audio in old_deleted_audios:
+            self._delete_audio_files(audio)
+            database_service.hard_delete_audio(db, audio.id)
+            count += 1
+
+        database_service.commit(db)
+        return count
 
 
 # Singleton instance

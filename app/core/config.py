@@ -77,6 +77,10 @@ class Settings:
    TTS_TEMP_DIR: str = os.getenv("TTS_TEMP_DIR", "./tts_temp")
    TTS_BATCH_SIZE: int = int(os.getenv("TTS_BATCH_SIZE", "1000"))
    TTS_MAX_RETRIES: int = int(os.getenv("TTS_MAX_RETRIES", "3"))
+   
+   # Audio output settings
+   AUDIO_OUTPUT_DIR: str = os.getenv("AUDIO_OUTPUT_DIR", "./audio_output")
+   MAX_AUDIOS_PER_USER: int = int(os.getenv("MAX_AUDIOS_PER_USER", "50"))
 
    # Database settings
    DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://video_user:video_password@localhost:5432/video_srt_db")

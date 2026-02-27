@@ -5,7 +5,7 @@ from typing import Optional, List
 from sqlalchemy.orm import Session
 from sqlalchemy import and_, desc, func
 
-from ..models.database import Video, UserQuota
+from ..models.database import Video, Audio, UserQuota
 
 
 class DatabaseService:
@@ -278,7 +278,9 @@ class DatabaseService:
             user_quota = UserQuota(
                 user_id=user_id,
                 video_count=0,
-                total_size_bytes=0
+                total_size_bytes=0,
+                audio_count=0,
+                audio_total_size_bytes=0
             )
             db.add(user_quota)
             db.flush()
@@ -310,6 +312,8 @@ class DatabaseService:
         user_id: str,
         video_count: Optional[int] = None,
         total_size_bytes: Optional[int] = None,
+        audio_count: Optional[int] = None,
+        audio_total_size_bytes: Optional[int] = None,
     ) -> UserQuota:
         """
         Update user quota information.
@@ -319,6 +323,8 @@ class DatabaseService:
             user_id: User identifier
             video_count: New video count (or None to keep current)
             total_size_bytes: New total size (or None to keep current)
+            audio_count: New audio count (or None to keep current)
+            audio_total_size_bytes: New audio total size (or None to keep current)
 
         Returns:
             Updated UserQuota object
@@ -331,6 +337,12 @@ class DatabaseService:
         if total_size_bytes is not None:
             user_quota.total_size_bytes = total_size_bytes
 
+        if audio_count is not None:
+            user_quota.audio_count = audio_count
+
+        if audio_total_size_bytes is not None:
+            user_quota.audio_total_size_bytes = audio_total_size_bytes
+
         user_quota.last_updated = datetime.utcnow()
         db.flush()
 
@@ -342,7 +354,7 @@ class DatabaseService:
         user_id: str,
     ) -> UserQuota:
         """
-        Recalculate user quota based on current videos.
+        Recalculate user quota based on current videos and audios.
 
         Args:
             db: Database session
@@ -357,12 +369,263 @@ class DatabaseService:
         video_count = self.get_user_videos_count(db, user_id, include_deleted=False)
         total_size = self.get_user_total_size(db, user_id, include_deleted=False)
 
+        # Recalculate audio count and total size
+        audio_count = self.get_user_audios_count(db, user_id, include_deleted=False)
+        audio_total_size = self.get_user_audio_total_size(db, user_id, include_deleted=False)
+
         user_quota.video_count = video_count
         user_quota.total_size_bytes = total_size
+        user_quota.audio_count = audio_count
+        user_quota.audio_total_size_bytes = audio_total_size
         user_quota.last_updated = datetime.utcnow()
         db.flush()
 
         return user_quota
+
+    # ============= Audio Operations =============
+
+    def create_audio(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: str,
+        filename: str,
+        file_path: str,
+        file_size: int,
+        duration_ms: Optional[float] = None,
+    ) -> Audio:
+        """
+        Create a new audio record in the database.
+
+        Args:
+            db: Database session
+            audio_id: GUID for the audio
+            user_id: User identifier
+            filename: Audio filename
+            file_path: Full path where audio is saved on disk
+            file_size: File size in bytes
+            duration_ms: Duration in milliseconds (optional)
+
+        Returns:
+            Audio object
+        """
+        audio = Audio(
+            id=audio_id,
+            user_id=user_id,
+            filename=filename,
+            file_path=file_path,
+            file_size=file_size,
+            duration_ms=duration_ms,
+            is_deleted=False,
+            created_at=datetime.utcnow(),
+        )
+        db.add(audio)
+        db.flush()
+        return audio
+
+    def get_audio_by_id(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: Optional[str] = None,
+        include_deleted: bool = False,
+    ) -> Optional[Audio]:
+        """
+        Get a specific audio by ID.
+
+        Args:
+            db: Database session
+            audio_id: Audio GUID
+            user_id: Optional user ID for permission check
+            include_deleted: Whether to include soft-deleted audios
+
+        Returns:
+            Audio object or None if not found
+        """
+        query = db.query(Audio).filter(Audio.id == audio_id)
+
+        if user_id:
+            query = query.filter(Audio.user_id == user_id)
+
+        if not include_deleted:
+            query = query.filter(Audio.is_deleted == False)
+
+        return query.first()
+
+    def get_user_audios(
+        self,
+        db: Session,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> List[Audio]:
+        """
+        Get all audios for a user.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+            include_deleted: Whether to include soft-deleted audios
+
+        Returns:
+            List of Audio objects sorted by created_at descending
+        """
+        query = db.query(Audio).filter(Audio.user_id == user_id)
+
+        if not include_deleted:
+            query = query.filter(Audio.is_deleted == False)
+
+        return query.order_by(desc(Audio.created_at)).all()
+
+    def get_user_audios_count(
+        self,
+        db: Session,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> int:
+        """
+        Get count of audios for a user.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+            include_deleted: Whether to include soft-deleted audios
+
+        Returns:
+            Count of audios
+        """
+        query = db.query(Audio).filter(Audio.user_id == user_id)
+
+        if not include_deleted:
+            query = query.filter(Audio.is_deleted == False)
+
+        return query.count()
+
+    def get_user_audio_total_size(
+        self,
+        db: Session,
+        user_id: str,
+        include_deleted: bool = False,
+    ) -> int:
+        """
+        Get total size of audios for a user.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+            include_deleted: Whether to include soft-deleted audios
+
+        Returns:
+            Total size in bytes
+        """
+        query = db.query(Audio).filter(Audio.user_id == user_id)
+
+        if not include_deleted:
+            query = query.filter(Audio.is_deleted == False)
+
+        total = query.with_entities(func.sum(Audio.file_size)).scalar()
+        return total or 0
+
+    def soft_delete_audio(
+        self,
+        db: Session,
+        audio_id: str,
+        user_id: str,
+    ) -> bool:
+        """
+        Mark an audio as deleted (soft delete).
+
+        Args:
+            db: Database session
+            audio_id: Audio GUID
+            user_id: User identifier for permission check
+
+        Returns:
+            True if successful, False if not found
+        """
+        audio = db.query(Audio).filter(
+            and_(
+                Audio.id == audio_id,
+                Audio.user_id == user_id,
+            )
+        ).first()
+
+        if not audio:
+            return False
+
+        audio.is_deleted = True
+        audio.deleted_at = datetime.utcnow()
+        db.flush()
+        return True
+
+    def hard_delete_audio(
+        self,
+        db: Session,
+        audio_id: str,
+    ) -> bool:
+        """
+        Permanently delete an audio record from database.
+
+        Args:
+            db: Database session
+            audio_id: Audio GUID
+
+        Returns:
+            True if successful, False if not found
+        """
+        audio = db.query(Audio).filter(Audio.id == audio_id).first()
+
+        if not audio:
+            return False
+
+        db.delete(audio)
+        db.flush()
+        return True
+
+    def get_deleted_audios_by_cutoff_date(
+        self,
+        db: Session,
+        cutoff_date: datetime,
+    ) -> List[Audio]:
+        """
+        Get audios deleted before a certain date.
+
+        Args:
+            db: Database session
+            cutoff_date: Date cutoff for deleted audios
+
+        Returns:
+            List of deleted Audio objects
+        """
+        return db.query(Audio).filter(
+            and_(
+                Audio.is_deleted == True,
+                Audio.deleted_at <= cutoff_date,
+            )
+        ).all()
+
+    def get_user_oldest_audios(
+        self,
+        db: Session,
+        user_id: str,
+        limit: int,
+    ) -> List[Audio]:
+        """
+        Get oldest non-deleted audios for a user.
+
+        Args:
+            db: Database session
+            user_id: User identifier
+            limit: Maximum number of audios to return
+
+        Returns:
+            List of oldest Audio objects
+        """
+        return db.query(Audio).filter(
+            and_(
+                Audio.user_id == user_id,
+                Audio.is_deleted == False
+            )
+        ).order_by(Audio.created_at).limit(limit).all()
 
     # ============= Batch Operations =============
 

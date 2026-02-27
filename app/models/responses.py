@@ -39,8 +39,7 @@ class TTSGenerateResponse(BaseModel):
 
    task_id: str = Field(..., description="Unique task identifier")
    status: str = Field("success", description="Operation status")
-   audio_filename: str = Field(..., description="Generated audio filename")
-   audio_path: str = Field(..., description="Full path to generated audio file")
+   audio_id: str = Field(..., description="Unique audio identifier (GUID)")
    audio_base64: Optional[str] = Field(None, description="Base64 encoded audio data")
    duration_ms: float = Field(..., description="Audio duration in milliseconds")
    size_bytes: int = Field(..., description="Audio file size in bytes")

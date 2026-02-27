@@ -115,7 +115,7 @@ class TTSGenerateRequest(BaseModel):
 
    srt_content: str = Field(..., description="SRT subtitle content")
    tts_voice: str = Field("BV074_streaming", description="Voice identifier for TTS synthesis")
-   output_filename: Optional[str] = Field(None, description="Output audio filename (default: auto-generated)")
+   user_id: Optional[str] = Field(None, description="User identifier (if not provided, defaults to 'anonymous')")
    return_base64: bool = Field(True, description="Return audio as base64 encoded string")
 
 class VideoUploadRequest(BaseModel):

@@ -21,6 +21,7 @@ wheels/
 *.egg
 tts_output/
 tts_temp/
+audio_output/
 
 # Virtual environments
 venv/
