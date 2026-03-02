@@ -67,3 +67,15 @@ class UserQuotaResponse(BaseModel):
    remaining_quota: int = Field(..., description="Remaining videos before cleanup")
    total_size_bytes: int = Field(..., description="Total size of all videos in bytes")
    last_updated: str = Field(..., description="Last quota update timestamp (ISO format)")
+
+
+class MergeVideoResponse(BaseModel):
+   """Response model for video merge operation"""
+
+   video_id: str = Field(..., description="New merged video GUID")
+   status: str = Field("success", description="Operation status")
+   file_size: int = Field(..., description="Merged video file size in bytes")
+   output_filename: str = Field(..., description="Output filename of merged video")
+   volume_level: int = Field(..., description="Volume level used for video audio (0-100)")
+   scale_audio_duration: bool = Field(..., description="Whether audio duration was scaled to match video")
+   message: Optional[str] = Field(None, description="Additional message or warning")

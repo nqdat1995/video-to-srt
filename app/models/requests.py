@@ -110,6 +110,15 @@ class BlurAndSubtitleRequest(BaseModel):
    subtitle_y_position: int = Field(90, ge=0, le=100, description="Vertical position of subtitle as percentage (0=top, 100=bottom")
 
 
+class MergeVideoRequest(BaseModel):
+   """Request model for merging video with audio"""
+
+   video_id: str = Field(..., description="Video ID from /upload-video endpoint (source video)")
+   audio_id: str = Field(..., description="Audio ID from /tts/generate endpoint (audio to merge)")
+   volume_level: int = Field(100, ge=0, le=100, description="Volume level for video audio before merge (0=mute, 100=preserve)")
+   scale_audio_duration: bool = Field(False, description="Scale audio duration to match video duration using atempo filter")
+
+
 class TTSGenerateRequest(BaseModel):
    """Request model for TTS audio synthesis from SRT"""
 

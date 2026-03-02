@@ -17,6 +17,7 @@ from ..models.requests import (
     BlurRequest,
     SubtitleRequest,
     TTSGenerateRequest,
+    MergeVideoRequest,
 )
 from ..models.responses import (
     ExtractResponse,
@@ -24,6 +25,7 @@ from ..models.responses import (
     TTSGenerateResponse,
     VideoUploadResponse,
     UserQuotaResponse,
+    MergeVideoResponse,
 )
 from ..services.video_processor import video_processor
 from ..services.tts_service import (
@@ -397,6 +399,92 @@ def blur_and_subtitle(req: BlurAndSubtitleRequest, db: Session = Depends(get_db)
         finally:
             # Clean up temporary SRT file
             _cleanup_temp_srt_file(temp_srt_path)
+    except HTTPException:
+        raise
+    except FileNotFoundError as e:
+        raise HTTPException(status_code=404, detail=str(e))
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=str(e))
+
+
+@router.post("/merge-video", response_model=MergeVideoResponse)
+def merge_video(req: MergeVideoRequest, db: Session = Depends(get_db)):
+    """
+    Merge video with audio from TTS or other sources
+
+    Merges a video file with an audio file, allowing control over:
+    - Volume level of the video's original audio (0-100, where 0=mute, 100=preserve)
+    - Audio duration scaling (if True, stretches/compresses audio to match video duration)
+
+    Args:
+        req: Merge video request with video_id, audio_id, volume_level, scale_audio_duration
+        db: Database session
+
+    Returns:
+        Response with new merged video ID saved to database
+    """
+    try:
+        # Fetch video from database
+        video = database_service.get_video_by_id(db, req.video_id, include_deleted=False)
+        if not video:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Video with ID {req.video_id} not found or has been deleted"
+            )
+        video_path = video.file_path
+        user_id = video.user_id
+
+        # Fetch audio from database
+        audio = database_service.get_audio_by_id(db, req.audio_id, include_deleted=False)
+        if not audio:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Audio with ID {req.audio_id} not found or has been deleted"
+            )
+        audio_path = audio.file_path
+
+        # Generate unique output filename using GUID (like uploads/{video_id}.mp4)
+        output_video_id = str(uuid.uuid4())
+        video_extension = Path(video_path).suffix
+        
+        # Determine output directory
+        output_dir = Path(settings.UPLOAD_DIR)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        
+        # Create output file path with GUID-based naming for uniqueness
+        output_file_path_str = str(output_dir / f"{output_video_id}{video_extension}")
+
+        # Merge video and audio with custom output path
+        result = video_processor.merge_video(
+            video_path=video_path,
+            audio_path=audio_path,
+            volume_level=req.volume_level,
+            scale_audio_duration=req.scale_audio_duration,
+            output_path=output_file_path_str,
+        )
+        
+        # Verify output file exists and get size
+        output_file_path = Path(output_file_path_str)
+        output_file_size = output_file_path.stat().st_size if output_file_path.exists() else 0
+
+        output_video = storage_service.save_video(
+            db=db,
+            video_id=output_video_id,
+            user_id=user_id,
+            file_path=output_file_path_str,
+            original_filename=f"{output_video_id}{video_extension}",
+            file_size=output_file_size,
+        )
+
+        return MergeVideoResponse(
+            video_id=output_video.id,
+            status="success",
+            file_size=output_file_size,
+            output_filename=f"{output_video_id}{video_extension}",
+            volume_level=req.volume_level,
+            scale_audio_duration=req.scale_audio_duration,
+            message=result.get("message"),
+        )
     except HTTPException:
         raise
     except FileNotFoundError as e:

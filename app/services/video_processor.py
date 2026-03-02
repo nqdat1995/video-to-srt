@@ -171,6 +171,67 @@ class VideoProcessor:
             "message": "Subtitles added successfully",
         }
 
+    def merge_video(self, video_path: str, audio_path: str, volume_level: int = 100, scale_audio_duration: bool = False, output_path: str = None) -> Dict[str, Any]:
+        """
+        Merge video with audio, with optional volume control and duration scaling
+
+        Args:
+            video_path: Path to video file
+            audio_path: Path to audio file
+            volume_level: Volume level for video audio (0-100)
+            scale_audio_duration: Whether to scale audio duration to match video
+            output_path: Optional explicit output path (if not provided, auto-generates with _merged suffix)
+
+        Returns:
+            Dictionary with output_path and processing stats
+
+        Raises:
+            FileNotFoundError: If input files don't exist
+            RuntimeError: If merge fails
+        """
+        # Validate input files
+        if not os.path.isfile(video_path):
+            raise FileNotFoundError(f"Video file not found: {video_path}")
+        if not os.path.isfile(audio_path):
+            raise FileNotFoundError(f"Audio file not found: {audio_path}")
+
+        # Get durations for warning
+        try:
+            video_duration = self.ffmpeg_service.get_video_duration(video_path)
+            audio_duration = self.ffmpeg_service.get_audio_duration(audio_path)
+            duration_diff_seconds = abs(video_duration - audio_duration)
+        except Exception:
+            video_duration = None
+            audio_duration = None
+            duration_diff_seconds = 0
+
+        # Merge video and audio
+        merged_output_path = self.ffmpeg_service.merge_video_with_audio(
+            video_path=video_path,
+            audio_path=audio_path,
+            volume_level=volume_level,
+            scale_audio_duration=scale_audio_duration,
+            output_suffix="merged",
+            output_path=output_path,
+        )
+
+        # Prepare warning message if duration mismatch
+        warning_message = None
+        if duration_diff_seconds > 0.5 and not scale_audio_duration:
+            warning_message = f"Warning: Video duration ({video_duration:.2f}s) differs from audio duration ({audio_duration:.2f}s). Consider using scale_audio_duration=true."
+
+        return {
+            "output_path": merged_output_path,
+            "video_path": video_path,
+            "audio_path": audio_path,
+            "volume_level": volume_level,
+            "scale_audio_duration": scale_audio_duration,
+            "video_duration": video_duration,
+            "audio_duration": audio_duration,
+            "message": warning_message or "Video merged successfully",
+            "has_warning": warning_message is not None,
+        }
+
     def process_video(
         self,
         req: ExtractRequest,

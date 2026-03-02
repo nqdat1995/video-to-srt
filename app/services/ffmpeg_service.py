@@ -456,5 +456,208 @@ class FfmpegService:
 
         return ";".join(parts), final_label
 
+    @staticmethod
+    def get_audio_duration(audio_path: str) -> float:
+        """
+        Get audio duration in seconds
+
+        Args:
+            audio_path: Path to audio file
+
+        Returns:
+            Duration in seconds
+
+        Raises:
+            RuntimeError: If probe fails
+        """
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "a:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1:nokey=1",
+            audio_path,
+        ]
+        try:
+            p = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if p.returncode != 0:
+                raise RuntimeError("Failed to get audio duration")
+            duration = float(p.stdout.strip())
+            return duration
+        except Exception as e:
+            raise RuntimeError(f"Failed to probe audio: {e}")
+
+    @staticmethod
+    def get_video_duration(video_path: str) -> float:
+        """
+        Get video duration in seconds
+
+        Args:
+            video_path: Path to video file
+
+        Returns:
+            Duration in seconds
+
+        Raises:
+            RuntimeError: If probe fails
+        """
+        cmd = [
+            "ffprobe",
+            "-v",
+            "error",
+            "-select_streams",
+            "v:0",
+            "-show_entries",
+            "stream=duration",
+            "-of",
+            "default=noprint_wrappers=1:nokey=1:nokey=1",
+            video_path,
+        ]
+        try:
+            p = subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                check=False,
+                encoding="utf-8",
+                errors="ignore",
+            )
+            if p.returncode != 0:
+                raise RuntimeError("Failed to get video duration")
+            duration = float(p.stdout.strip())
+            return duration
+        except Exception as e:
+            raise RuntimeError(f"Failed to probe video: {e}")
+
+    @staticmethod
+    def merge_video_with_audio(
+        video_path: str,
+        audio_path: str,
+        volume_level: int = 100,
+        scale_audio_duration: bool = False,
+        output_suffix: str = "merged",
+        output_path: str = None,
+    ) -> str:
+        """
+        Merge video with audio, with optional volume control and audio duration scaling
+
+        Args:
+            video_path: Path to video file (source video)
+            audio_path: Path to audio file (audio to merge)
+            volume_level: Volume level for video audio before merge (0-100, where 0=mute, 100=preserve)
+            scale_audio_duration: If True, scale audio duration to match video using atempo filter (pitch-preserving)
+            output_suffix: Output file suffix (only used if output_path is None)
+            output_path: Optional explicit output path (if provided, output_suffix is ignored)
+
+        Returns:
+            Path to merged output video
+
+        Raises:
+            RuntimeError: If merging fails
+        """
+        # Validate input files exist
+        if not Path(video_path).exists():
+            raise RuntimeError(f"Video file not found: {video_path}")
+        if not Path(audio_path).exists():
+            raise RuntimeError(f"Audio file not found: {audio_path}")
+
+        # Get video and audio durations
+        try:
+            video_duration = FfmpegService.get_video_duration(video_path)
+            audio_duration = FfmpegService.get_audio_duration(audio_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to get media durations: {e}")
+
+        # Generate output path if not provided
+        if output_path is None:
+            base_path = str(video_path)
+            path_obj = Path(base_path)
+            output_path = (
+                path_obj.parent / f"{path_obj.stem}_{output_suffix}{path_obj.suffix}"
+            )
+            output_path = str(output_path)
+
+        # Build audio filter chain
+        audio_filter = None
+        if scale_audio_duration:
+            # Calculate tempo adjustment to stretch audio to video duration
+            tempo_ratio = video_duration / audio_duration if audio_duration > 0 else 1.0
+            # Clamp tempo ratio to reasonable range (0.5x to 2.0x)
+            tempo_ratio = max(0.5, min(2.0, tempo_ratio))
+            audio_filter = f"atempo={tempo_ratio:.4f}"
+        
+        # Apply volume adjustment if needed
+        if volume_level != 100:
+            volume_factor = volume_level / 100.0
+            if audio_filter:
+                audio_filter = f"{audio_filter},volume={volume_factor:.4f}"
+            else:
+                audio_filter = f"volume={volume_factor:.4f}"
+
+        # Build ffmpeg command
+        cmd = [
+            "ffmpeg",
+            "-y",
+            "-hide_banner",
+            "-loglevel",
+            "error",
+            "-i",
+            video_path,
+            "-i",
+            audio_path,
+        ]
+
+        # Add video codec (copy to avoid re-encoding)
+        cmd.extend([
+            "-c:v",
+            "copy",
+        ])
+
+        # Add audio filter if present
+        if audio_filter:
+            cmd.extend([
+                "-af",
+                audio_filter,
+            ])
+
+        # Audio codec settings (AAC with reasonable bitrate)
+        cmd.extend([
+            "-c:a",
+            "aac",
+            "-b:a",
+            "128k",
+        ])
+
+        # Map video from input 1, audio from input 2
+        cmd.extend([
+            "-map",
+            "0:v:0",
+            "-map",
+            "1:a:0",
+        ])
+
+        cmd.append(str(output_path))
+
+        try:
+            p = subprocess.run(
+                cmd, capture_output=True, text=True, encoding="utf-8", errors="ignore"
+            )
+            if p.returncode != 0:
+                raise RuntimeError(p.stderr or "ffmpeg merge failed")
+            return str(output_path)
+        except Exception as e:
+            raise RuntimeError(f"Failed to merge video and audio: {e}")
+
 # Singleton instance
 ffmpeg_service = FfmpegService()
