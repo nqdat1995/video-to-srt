@@ -16,6 +16,7 @@ dependencies = [
     "pydantic>=2.0.0,<3.0.0",
     "python-dotenv>=1.0.0",
     "python-multipart==0.0.22",
+    "setuptools==80.9.0",
     "sqlalchemy>=2.0.0,<3.0.0",
     "uvicorn[standard]>=0.24.0,<0.31.0",
     "websocket-client==1.9.0",
