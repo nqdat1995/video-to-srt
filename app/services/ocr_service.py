@@ -148,7 +148,7 @@ class OcrService:
                        engine = PaddleOCR(
                            lang=lang,
                            use_angle_cls=use_textline_orientation,
-                           use_gpu=False,  # Ensure CPU mode to avoid GPU-specific issues
+                           use_gpu=True,  # Ensure CPU mode to avoid GPU-specific issues
                            show_log=False  # Disable PaddleOCR's internal logging
                        )
                finally:

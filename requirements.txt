@@ -13,13 +13,13 @@ numpy>=1.24.0,<2.0.0
 paddleocr==2.7.0.3
 
 # PaddlePaddle framework - Using latest stable CPU version
-paddlepaddle==3.0.0
+# paddlepaddle==3.0.0
 
 # For GPU (uncomment and comment CPU version above)
 # Choose appropriate CUDA version:
 # - CUDA 12.6: paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu126/
 # - CUDA 12.9: paddlepaddle-gpu==3.2.1 -i https://www.paddlepaddle.org.cn/packages/stable/cu129/
-# paddlepaddle-gpu>=3.2.1,<4.0.0
+paddlepaddle-gpu==2.5.2
 
 # Image processing (required by PaddleOCR)
 Pillow>=10.0.0
