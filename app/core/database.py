@@ -9,9 +9,15 @@ engine = create_engine(
     settings.DATABASE_URL,
     echo=False,
     pool_pre_ping=True,
+    pool_size=5,
+    max_overflow=5,
     pool_recycle=3600,
-    pool_size=10,
-    max_overflow=20
+    connect_args={
+        "keepalives": 1,
+        "keepalives_idle": 30,
+        "keepalives_interval": 10,
+        "keepalives_count": 5,
+    },
 )
 
 # Create session factory
@@ -26,12 +32,17 @@ Base = declarative_base()
 
 
 def get_db():
-    """Dependency function to get database session"""
     db = SessionLocal()
     try:
         yield db
+    except Exception:
+        db.rollback()
+        raise
     finally:
-        db.close()
+        try:
+            db.close()
+        except Exception:
+            pass  # tránh crash khi connection đã bị drop
 
 
 def _migrate_user_quotas_schema():
