@@ -1,7 +1,9 @@
 """SQLAlchemy ORM models for database tables"""
 
+import json
 from datetime import datetime
-from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Index
+from typing import List, Optional
+from sqlalchemy import Column, String, Integer, Float, DateTime, Boolean, Index, Text
 from ..core.database import Base
 
 
@@ -18,6 +20,13 @@ class Video(Base):
     created_at = Column(DateTime, default=datetime.utcnow, nullable=False, index=True)
     deleted_at = Column(DateTime, nullable=True)  # Timestamp when marked as deleted
     
+    # Subtitle caching columns
+    subtitles = Column(Text, nullable=True)  # Full SRT content
+    subtitles_detail = Column(Text, nullable=True)  # JSON string of SrtDetail list
+    subtitles_output_path = Column(String(500), nullable=True)  # Path to saved SRT file
+    extraction_request_id = Column(String(36), nullable=True)  # Tracks active extraction
+    last_extraction_at = Column(DateTime, nullable=True)  # Cache timestamp
+    
     __table_args__ = (
         Index("idx_video_user_id_created_at", "user_id", "created_at"),
         Index("idx_video_user_id_is_deleted", "user_id", "is_deleted"),
@@ -25,6 +34,40 @@ class Video(Base):
 
     def __repr__(self):
         return f"<Video(id={self.id}, user_id={self.user_id}, filename={self.filename}, is_deleted={self.is_deleted})>"
+
+    def serialize_srt_details(self, srt_detail_list: List) -> str:
+        """
+        Serialize a list of SrtDetail objects to JSON string.
+        
+        Args:
+            srt_detail_list: List of SrtDetail Pydantic models
+            
+        Returns:
+            JSON string representation of the list
+        """
+        if not srt_detail_list:
+            return "[]"
+        
+        serialized = [detail.model_dump() for detail in srt_detail_list]
+        return json.dumps(serialized, ensure_ascii=False)
+
+    def deserialize_srt_details(self, json_string: Optional[str]) -> List:
+        """
+        Deserialize a JSON string back to list of SrtDetail dictionaries.
+        
+        Args:
+            json_string: JSON string from subtitles_detail column
+            
+        Returns:
+            List of SrtDetail dictionaries, or empty list if None/invalid
+        """
+        if not json_string:
+            return []
+        
+        try:
+            return json.loads(json_string)
+        except (json.JSONDecodeError, TypeError):
+            return []
 
 
 class Audio(Base):

@@ -253,6 +253,142 @@ class DatabaseService:
             )
         ).all()
 
+    # ============= Subtitle Extraction Operations =============
+
+    def get_cached_extraction(
+        self,
+        db: Session,
+        video_id: str,
+    ) -> Optional[tuple]:
+        """
+        Get cached extraction results if available and not expired.
+
+        Args:
+            db: Database session
+            video_id: Video GUID
+
+        Returns:
+            Tuple of (srt, srt_detail_list, srt_output_path) or None if not cached/expired
+        """
+        from ..core.config import settings
+
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            return None
+
+        # Check if subtitles are cached and not expired
+        if not video.subtitles or not video.last_extraction_at:
+            return None
+
+        # Check cache expiry
+        cutoff_time = datetime.utcnow() - timedelta(days=settings.SUBTITLES_CACHE_EXPIRY_DAYS)
+        if video.last_extraction_at < cutoff_time:
+            # Cache expired, return None to trigger re-extraction
+            return None
+
+        # Deserialize srt_detail from JSON string
+        srt_detail_list = video.deserialize_srt_details(video.subtitles_detail)
+
+        return (video.subtitles, srt_detail_list, video.subtitles_output_path)
+
+    def set_extraction_request_id(
+        self,
+        db: Session,
+        video_id: str,
+        request_id: str,
+    ) -> bool:
+        """
+        Set extraction_request_id to lock a video for extraction.
+
+        Args:
+            db: Database session
+            video_id: Video GUID
+            request_id: Unique request identifier (UUID)
+
+        Returns:
+            True if lock acquired, False if already locked (409 Conflict)
+
+        Raises:
+            HTTPException(409) if extraction already in progress
+        """
+        from fastapi import HTTPException
+
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            raise HTTPException(status_code=404, detail="Video not found")
+
+        # Check if already locked
+        if video.extraction_request_id is not None:
+            raise HTTPException(
+                status_code=409,
+                detail="Extraction already in progress for this video"
+            )
+
+        # Acquire lock
+        video.extraction_request_id = request_id
+        db.flush()
+        return True
+
+    def save_extraction_result(
+        self,
+        db: Session,
+        video_id: str,
+        srt: str,
+        srt_detail_list: list,
+        srt_output_path: Optional[str] = None,
+    ) -> bool:
+        """
+        Save extraction results and clear the extraction lock.
+
+        Args:
+            db: Database session
+            video_id: Video GUID
+            srt: Full SRT content string
+            srt_detail_list: List of SrtDetail objects or dicts
+            srt_output_path: Optional path where SRT was saved
+
+        Returns:
+            True if successful, False if not found
+        """
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            return False
+
+        # Save subtitles
+        video.subtitles = srt
+        video.subtitles_detail = video.serialize_srt_details(srt_detail_list)
+        video.subtitles_output_path = srt_output_path
+        video.last_extraction_at = datetime.utcnow()
+        
+        # Clear the extraction lock
+        video.extraction_request_id = None
+        
+        db.flush()
+        return True
+
+    def clear_extraction_request_id(
+        self,
+        db: Session,
+        video_id: str,
+    ) -> bool:
+        """
+        Clear the extraction lock (on error or timeout).
+
+        Args:
+            db: Database session
+            video_id: Video GUID
+
+        Returns:
+            True if successful, False if not found
+        """
+        video = db.query(Video).filter(Video.id == video_id).first()
+        if not video:
+            return False
+
+        video.extraction_request_id = None
+        db.flush()
+        return True
+
     # ============= User Quota Operations =============
 
     def get_or_create_user_quota(

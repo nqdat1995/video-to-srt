@@ -6,7 +6,7 @@ import uuid
 import os
 from pathlib import Path
 from datetime import datetime
-from typing import Dict
+from typing import Dict, Optional
 
 from fastapi import APIRouter, HTTPException, BackgroundTasks, UploadFile, File, Depends, Query
 from sqlalchemy.orm import Session
@@ -99,16 +99,27 @@ def extract_srt(req: ExtractRequest, db: Session = Depends(get_db)):
 
 
 @router.post("/extract-srt-frames", response_model=ExtractResponse)
-def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
+def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db), background_tasks: BackgroundTasks = BackgroundTasks()):
     """
-    Synchronous full-FPS subtitle extraction: runs OCR on every sampled frame
-
-    This endpoint samples frames at `target_fps` and runs OCR on each sampled
-    frame. Consecutive sampled frames with identical or similar OCR text
-    (based on `sim_thr`) are merged into a single SRT cue.
+    Full-FPS subtitle extraction with caching and async support.
+    
+    Features:
+    - Runs OCR on every sampled frame
+    - Caches results in database with configurable expiry
+    - Supports async background execution
+    - Prevents duplicate concurrent extractions via request locking
+    
+    Args:
+        req: Extraction request
+        db: Database session
+        background_tasks: FastAPI background tasks
+        
+    Returns:
+        Extraction response with SRT and cache status
     """
     # Determine which video path to use
     video_path = None
+    video_id = None
     
     if req.video_id:
         # Priority 1: video_id - fetch from database
@@ -120,6 +131,7 @@ def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
                 detail=f"Video with ID {req.video_id} not found or has been deleted"
             )
         video_path = video.file_path
+        video_id = req.video_id
         original_filename = video.filename
     elif req.video:
         # Priority 2: video - use provided path
@@ -131,14 +143,233 @@ def extract_srt_frames(req: ExtractRequest, db: Session = Depends(get_db)):
             detail="Either video_id or video must be provided"
         )
     
-    # Process video with full-fps mode
-    result = video_processor.process_video_fullfps(
-        req, 
-        video_path=video_path,
-        original_filename=original_filename,
-        auto_save_srt=(req.video_id is not None)
-    )
-    return result
+    # Check cache if force_extract is False and we have video_id
+    if video_id and not req.force_extract:
+        cached_result = database_service.get_cached_extraction(db, video_id)
+        if cached_result:
+            srt, srt_detail_list, srt_output_path = cached_result
+            
+            # Reconstruct the stats from cache (basic stats)
+            return ExtractResponse(
+                srt=srt,
+                srt_detail=srt_detail_list if isinstance(srt_detail_list, list) and srt_detail_list and hasattr(srt_detail_list[0], 'model_dump') else srt_detail_list,
+                stats={"cache_hit": True, "cached": True},
+                srt_output_path=srt_output_path,
+                task_id=None,
+                is_cached=True
+            )
+    
+    # Handle async execution
+    if req.execute_async:
+        task_id = str(uuid.uuid4())
+        
+        # Initialize task tracking
+        with _TASKS_LOCK:
+            _TASKS[task_id] = {
+                "status": "processing",
+                "progress": 0.0,
+                "result": None,
+                "error": None,
+                "created_at": time.time(),
+                "video_id": video_id,
+            }
+        
+        # Queue background task
+        background_tasks.add_task(
+            _process_extraction_background,
+            task_id=task_id,
+            video_id=video_id,
+            req=req,
+            video_path=video_path,
+            original_filename=original_filename,
+            db_session_maker=None,  # Will create new session in background task
+        )
+        
+        # Return immediately with task info
+        return ExtractResponse(
+            srt="",
+            srt_detail=[],
+            stats={},
+            srt_output_path=None,
+            task_id=task_id,
+            is_cached=False
+        )
+    
+    # Synchronous execution
+    if video_id:
+        # Try to acquire extraction lock
+        request_id = str(uuid.uuid4())
+        try:
+            database_service.set_extraction_request_id(db, video_id, request_id)
+            db.commit()  # Persist lock to database immediately
+        except HTTPException:
+            # Already locked, return 409
+            db.rollback()
+            raise
+        except Exception:
+            db.rollback()
+            raise
+    
+    try:
+        # Process video with full-fps mode
+        result = video_processor.process_video_fullfps(
+            req, 
+            video_path=video_path,
+            original_filename=original_filename,
+            auto_save_srt=(video_id is not None)
+        )
+        
+        # Save extraction result to database
+        if video_id and result:
+            database_service.save_extraction_result(
+                db=db,
+                video_id=video_id,
+                srt=result.srt,
+                srt_detail_list=result.srt_detail,
+                srt_output_path=result.srt_output_path,
+            )
+            db.commit()
+        
+        # Add task_id and is_cached fields to response
+        result.task_id = None
+        result.is_cached = False
+        
+        return result
+        
+    except Exception as e:
+        # Clear lock on error
+        if video_id:
+            database_service.clear_extraction_request_id(db, video_id)
+            db.commit()
+        raise
+    finally:
+        # Ensure lock is cleared (in case of unexpected error)
+        if video_id:
+            try:
+                database_service.clear_extraction_request_id(db, video_id)
+                db.commit()
+            except:
+                pass
+
+
+def _process_extraction_background(
+    task_id: str,
+    video_id: Optional[str],
+    req: ExtractRequest,
+    video_path: str,
+    original_filename: Optional[str],
+    db_session_maker,
+) -> None:
+    """
+    Background task for async extraction.
+    
+    Args:
+        task_id: Unique task identifier
+        video_id: Optional video ID for database persistence
+        req: Extraction request
+        video_path: Path to video file
+        original_filename: Optional original filename
+        db_session_maker: Database session factory (unused, creates new session)
+    """
+    from ..core.database import SessionLocal
+    
+    db = None
+    request_id = str(uuid.uuid4())
+    
+    try:
+        db = SessionLocal()
+        
+        # Acquire extraction lock
+        if video_id:
+            try:
+                database_service.set_extraction_request_id(db, video_id, request_id)
+                db.commit()  # Persist lock to database immediately
+            except HTTPException as e:
+                # Already locked
+                db.rollback()
+                with _TASKS_LOCK:
+                    if task_id in _TASKS:
+                        _TASKS[task_id]["status"] = "failed"
+                        _TASKS[task_id]["error"] = f"Extraction already in progress for this video"
+                return
+            except Exception as e:
+                db.rollback()
+                with _TASKS_LOCK:
+                    if task_id in _TASKS:
+                        _TASKS[task_id]["status"] = "failed"
+                        _TASKS[task_id]["error"] = str(e)
+                return
+        
+        # Process video with progress callback
+        def update_progress(progress: float):
+            with _TASKS_LOCK:
+                if task_id in _TASKS:
+                    _TASKS[task_id]["progress"] = progress
+        
+        result = video_processor.process_video_fullfps(
+            req,
+            video_path=video_path,
+            original_filename=original_filename,
+            auto_save_srt=(video_id is not None),
+            progress_callback=update_progress,
+        )
+        
+        # Save extraction result to database
+        if video_id and result:
+            database_service.save_extraction_result(
+                db=db,
+                video_id=video_id,
+                srt=result.srt,
+                srt_detail_list=result.srt_detail,
+                srt_output_path=result.srt_output_path,
+            )
+            db.commit()
+        
+        # Update task status
+        result.task_id = task_id
+        result.is_cached = False
+        
+        with _TASKS_LOCK:
+            if task_id in _TASKS:
+                _TASKS[task_id]["status"] = "completed"
+                _TASKS[task_id]["result"] = result
+                _TASKS[task_id]["progress"] = 1.0
+                
+    except Exception as e:
+        # Log error and update task status
+        error_msg = f"{type(e).__name__}: {str(e)}"
+        
+        # Clear lock on error
+        if video_id:
+            try:
+                database_service.clear_extraction_request_id(db, video_id)
+                if db:
+                    db.commit()
+            except:
+                pass
+        
+        with _TASKS_LOCK:
+            if task_id in _TASKS:
+                _TASKS[task_id]["status"] = "failed"
+                _TASKS[task_id]["error"] = error_msg
+                
+    finally:
+        # Ensure lock is cleared
+        if video_id:
+            try:
+                database_service.clear_extraction_request_id(db, video_id)
+                if db:
+                    db.commit()
+            except:
+                pass
+        
+        # Close database session
+        if db:
+            try:
+                db.close()
+            except:
+                pass
+
 
 
 @router.post("/blur")

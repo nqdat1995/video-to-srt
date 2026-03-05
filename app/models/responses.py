@@ -22,6 +22,8 @@ class ExtractResponse(BaseModel):
    srt_detail: List[SrtDetail] = []
    stats: Dict[str, Any]
    srt_output_path: Optional[str] = Field(None, description="Path where SRT file was saved (if auto-saved)")
+   task_id: Optional[str] = Field(None, description="Async task ID (if execute_async=True)")
+   is_cached: bool = Field(False, description="Indicates if result came from cache")
 
 
 class TaskStatusResponse(BaseModel):

@@ -15,6 +15,9 @@ class Settings:
    # OCR Cache settings
    OCR_CACHE_MAX: int = int(os.getenv("OCR_CACHE_MAX", "4"))
    BATCH_OCR_SIZE: int = int(os.getenv("BATCH_OCR_SIZE", "8"))
+   
+   # Subtitles cache expiration (days)
+   SUBTITLES_CACHE_EXPIRY_DAYS: int = int(os.getenv("SUBTITLES_CACHE_EXPIRY_DAYS", "7"))
 
    # Logging level
    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "ERROR").upper()
@@ -83,7 +86,7 @@ class Settings:
    MAX_AUDIOS_PER_USER: int = int(os.getenv("MAX_AUDIOS_PER_USER", "50"))
 
    # Database settings
-   DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://video_user:video_password@localhost:5432/video_srt_db")
+   DATABASE_URL: str = os.getenv("DATABASE_URL", "postgresql://admin:admin@localhost:5432/postgres")
    
    # Upload settings
    UPLOAD_DIR: str = os.getenv("UPLOAD_DIR", "./uploads")

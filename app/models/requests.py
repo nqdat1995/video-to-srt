@@ -59,6 +59,18 @@ class ExtractRequest(BaseModel):
        None,
        description="Video ID from /upload-video endpoint. If provided, system will fetch video path from database and auto-save SRT to configured output directory"
    )
+   
+   # Async execution
+   execute_async: bool = Field(
+       False,
+       description="If True, run extraction in background and return task_id for tracking"
+   )
+   
+   # Cache control
+   force_extract: bool = Field(
+       False,
+       description="If True, bypass cache and re-extract even if subtitles exist"
+   )
 
    @field_validator('video', 'video_id', mode='before')
    @classmethod
